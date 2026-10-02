@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-10-02T13:49:02+00:00",
+  "task": "sentiment",
+  "labels": [
+    "negative",
+    "positive"
+  ],
+  "base_model": {
+    "id": "FacebookAI/roberta-base",
+    "version": "e2da8e2f811d1448a5b465c236feacd80ffbac7b"
+  },
+  "dataset": {
+    "id": "surrey-nlp/BESSTIE-CW-26",
+    "version": "79d3393991d561c1cc3e01ce92fe77ba40c0a655",
+    "sizes": {
+      "train": 3747,
+      "validation": 313,
+      "test": 2183
+    }
+  },
+  "recipe": {
+    "source": "notebooks/complete_experiments.ipynb, train_roberta (stage Q2.1, pooled)",
+    "max_length": 256,
+    "preprocessing": "none (raw text to tokenizer)",
+    "loss": "cross-entropy with balanced class weights",
+    "class_weights": [
+      0.9824331410592554,
+      1.0182065217391305
+    ],
+    "selection": "best validation macro_f1 over epochs",
+    "fp16": true,
+    "epochs": 4,
+    "learning_rate": 2e-05,
+    "train_batch_size": 16,
+    "eval_batch_size": 32,
+    "warmup_ratio": 0.1,
+    "weight_decay": 0.01,
+    "seed": 42
+  },
+  "environment": {
+    "python": "3.13.15",
+    "torch": "2.11.0+cu130",
+    "transformers": "5.17.0",
+    "device": "Tesla T4"
+  },
+  "train_seconds": 184.0,
+  "validation_metrics": {
+    "n": 313,
+    "accuracy": 0.9361022364217252,
+    "macro_f1": 0.9359918200408998,
+    "macro_precision": 0.9370338496844521,
+    "macro_recall": 0.9356413398692811,
+    "class_0_f1": 0.9386503067484663,
+    "class_1_f1": 0.9333333333333332,
+    "confusion_matrix": [
+      [
+        153,
+        7
+      ],
+      [
+        13,
+        140
+      ]
+    ]
+  },
+  "test_metrics": {
+    "n": 2183,
+    "accuracy": 0.8983050847457628,
+    "macro_f1": 0.8982148437893803,
+    "macro_precision": 0.8984041176253055,
+    "macro_recall": 0.8980996403862531,
+    "class_0_f1": 0.9012455516014235,
+    "class_1_f1": 0.8951841359773371,
+    "confusion_matrix": [
+      [
+        1013,
+        104
+      ],
+      [
+        118,
+        948
+      ]
+    ]
+  },
+  "test_metrics_by_variety": {
+    "en-AU": {
+      "n": 667,
+      "accuracy": 0.904047976011994,
+      "macro_f1": 0.9035273272947515,
+      "macro_precision": 0.9064995180153144,
+      "macro_recall": 0.9025531340057638,
+      "class_0_f1": 0.9106145251396648,
+      "class_1_f1": 0.8964401294498382,
+      "confusion_matrix": [
+        [
+          326,
+          21
+        ],
+        [
+          43,
+          277
+        ]
+      ]
+    },
+    "en-IN": {
+      "n": 816,
+      "accuracy": 0.8468137254901961,
+      "macro_f1": 0.8465627806434435,
+      "macro_precision": 0.8463385895408884,
+      "macro_recall": 0.8470960356669479,
+      "class_0_f1": 0.8527679623085983,
+      "class_1_f1": 0.8403575989782887,
+      "confusion_matrix": [
+        [
+          362,
+          68
+        ],
+        [
+          57,
+          329
+        ]
+      ]
+    },
+    "en-UK": {
+      "n": 700,
+      "accuracy": 0.9528571428571428,
+      "macro_f1": 0.9528293217836643,
+      "macro_precision": 0.952752529583262,
+      "macro_recall": 0.9529411764705882,
+      "class_0_f1": 0.9516837481698389,
+      "class_1_f1": 0.9539748953974896,
+      "confusion_matrix": [
+        [
+          325,
+          15
+        ],
+        [
+          18,
+          342
+        ]
+      ]
+    }
+  }
+}

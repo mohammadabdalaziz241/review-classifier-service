@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "task": "sarcasm",
+  "max_seq_length": 384,
+  "preprocessing": {
+    "normalize_unicode": false,
+    "normalize_whitespace": false,
+    "replace_urls": false,
+    "replace_mentions": false
+  }
+}

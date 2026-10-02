@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "task": "sentiment",
+  "max_seq_length": 256,
+  "preprocessing": {
+    "normalize_unicode": false,
+    "normalize_whitespace": false,
+    "replace_urls": false,
+    "replace_mentions": false
+  }
+}

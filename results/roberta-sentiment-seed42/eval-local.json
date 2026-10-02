@@ -1,0 +1,157 @@
+{
+  "model": {
+    "id": "checkpoints/roberta-sentiment-seed42",
+    "version": "sha256:0a279c045e7cc7838fe4a3ea2268f9bd794cbe8f688a4b6aa392783ac810645e",
+    "task": "sentiment",
+    "labels": [
+      "negative",
+      "positive"
+    ],
+    "max_seq_length": 256,
+    "preprocessing": {
+      "normalize_unicode": false,
+      "normalize_whitespace": false,
+      "replace_urls": false,
+      "replace_mentions": false,
+      "source": {
+        "normalize_unicode": "checkpoint",
+        "normalize_whitespace": "checkpoint",
+        "replace_urls": "checkpoint",
+        "replace_mentions": "checkpoint"
+      }
+    }
+  },
+  "n": 2183,
+  "seconds": 20.15,
+  "metrics": {
+    "class_0_precision": 0.8957597173144877,
+    "class_0_recall": 0.9077887197851388,
+    "class_0_f1": 0.9017341040462428,
+    "class_0_support": 1117,
+    "class_1_precision": 0.9019980970504282,
+    "class_1_recall": 0.8893058161350844,
+    "class_1_f1": 0.8956069910250355,
+    "class_1_support": 1066,
+    "accuracy": 0.8987631699496106,
+    "macro_precision": 0.8988789071824579,
+    "macro_recall": 0.8985472679601116,
+    "macro_f1": 0.8986705475356391,
+    "n": 2183,
+    "confusion_matrix": [
+      [
+        1014,
+        103
+      ],
+      [
+        118,
+        948
+      ]
+    ]
+  },
+  "metrics_by_variety": {
+    "en-AU": {
+      "class_0_precision": 0.8834688346883469,
+      "class_0_recall": 0.9394812680115274,
+      "class_0_f1": 0.9106145251396648,
+      "class_0_support": 347,
+      "class_1_precision": 0.9295302013422819,
+      "class_1_recall": 0.865625,
+      "class_1_f1": 0.8964401294498382,
+      "class_1_support": 320,
+      "accuracy": 0.904047976011994,
+      "macro_precision": 0.9064995180153144,
+      "macro_recall": 0.9025531340057638,
+      "macro_f1": 0.9035273272947515,
+      "n": 667,
+      "confusion_matrix": [
+        [
+          326,
+          21
+        ],
+        [
+          43,
+          277
+        ]
+      ]
+    },
+    "en-IN": {
+      "class_0_precision": 0.8642857142857143,
+      "class_0_recall": 0.8441860465116279,
+      "class_0_f1": 0.8541176470588235,
+      "class_0_support": 430,
+      "class_1_precision": 0.8308080808080808,
+      "class_1_recall": 0.8523316062176166,
+      "class_1_f1": 0.8414322250639387,
+      "class_1_support": 386,
+      "accuracy": 0.8480392156862745,
+      "macro_precision": 0.8475468975468976,
+      "macro_recall": 0.8482588263646222,
+      "macro_f1": 0.8477749360613811,
+      "n": 816,
+      "confusion_matrix": [
+        [
+          363,
+          67
+        ],
+        [
+          57,
+          329
+        ]
+      ]
+    },
+    "en-UK": {
+      "class_0_precision": 0.9475218658892128,
+      "class_0_recall": 0.9558823529411765,
+      "class_0_f1": 0.9516837481698389,
+      "class_0_support": 340,
+      "class_1_precision": 0.957983193277311,
+      "class_1_recall": 0.95,
+      "class_1_f1": 0.9539748953974896,
+      "class_1_support": 360,
+      "accuracy": 0.9528571428571428,
+      "macro_precision": 0.952752529583262,
+      "macro_recall": 0.9529411764705882,
+      "macro_f1": 0.9528293217836643,
+      "n": 700,
+      "confusion_matrix": [
+        [
+          325,
+          15
+        ],
+        [
+          18,
+          342
+        ]
+      ]
+    }
+  },
+  "changed_by_preprocessing": {
+    "count": 0,
+    "indices": []
+  },
+  "expected": {
+    "n": 2183,
+    "accuracy": 0.8983050847457628,
+    "macro_f1": 0.8982148437893803,
+    "macro_precision": 0.8984041176253055,
+    "macro_recall": 0.8980996403862531,
+    "class_0_f1": 0.9012455516014235,
+    "class_1_f1": 0.8951841359773371,
+    "confusion_matrix": [
+      [
+        1013,
+        104
+      ],
+      [
+        118,
+        948
+      ]
+    ]
+  },
+  "differences": {
+    "macro_f1": 0.0004557037462588065,
+    "accuracy": 0.0004580852038478245
+  },
+  "tolerance": 0.005,
+  "passed": true
+}
