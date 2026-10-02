@@ -28,7 +28,7 @@ def test_health(client):
 
 
 def test_ready_once_model_is_loaded(client):
-    assert client.get("/ready").json() == {"status": "ready"}
+    assert client.get("/ready").json() == {"status": "ready", "database": "disabled"}
 
 
 def test_not_ready_before_model_loads(settings):

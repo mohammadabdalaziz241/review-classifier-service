@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .serving_config import PREPROCESSING_ENV, PREPROCESSING_KEYS
 
@@ -64,6 +64,11 @@ class Settings:
     model_revision: str | None = None
     device: str = "auto"
 
+    # Where to record predictions and feedback, e.g.
+    # postgresql://user:password@host:5432/db. Unset: nothing is recorded.
+    # Excluded from repr so the password never ends up in logs or tracebacks.
+    database_url: str | None = field(default=None, repr=False)
+
     # Request limits.
     max_text_chars: int = 2000
     max_batch_size: int = 32
@@ -90,6 +95,7 @@ class Settings:
             model_id=env.get("MODEL_ID", "").strip() or defaults.model_id,
             model_revision=env.get("MODEL_REVISION", "").strip() or None,
             device=_choice(env, "DEVICE", defaults.device, VALID_DEVICES),
+            database_url=env.get("DATABASE_URL", "").strip() or None,
             max_text_chars=_int(env, "MAX_TEXT_CHARS", defaults.max_text_chars),
             max_batch_size=_int(env, "MAX_BATCH_SIZE", defaults.max_batch_size),
             inference_batch_size=_int(env, "INFERENCE_BATCH_SIZE", defaults.inference_batch_size),

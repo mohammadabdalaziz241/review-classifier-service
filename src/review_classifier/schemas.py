@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -24,6 +26,7 @@ class BatchPredictRequest(BaseModel):
 
 
 class PredictionOut(BaseModel):
+    id: uuid.UUID = Field(description="Identifies this prediction, e.g. to send feedback on it.")
     label: str
     score: float = Field(description="Probability of the predicted label.")
     scores: dict[str, float] = Field(description="Probability of every label.")
@@ -39,6 +42,7 @@ class PredictResponse(BaseModel):
     model: ModelRef
     prediction: PredictionOut
     inference_ms: float
+    recorded: bool = Field(description="Whether the prediction was stored in the database.")
 
 
 class BatchPredictResponse(BaseModel):
@@ -46,6 +50,30 @@ class BatchPredictResponse(BaseModel):
     model: ModelRef
     predictions: list[PredictionOut]
     inference_ms: float
+    recorded: bool = Field(description="Whether the predictions were stored in the database.")
+
+
+class FeedbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prediction_id: uuid.UUID
+    label: str = Field(min_length=1, description="The correct label, e.g. 'sarcastic'.")
+    text: str | None = Field(
+        default=None,
+        description=(
+            "Optional: the review text, to keep it as a labelled example. It must be exactly "
+            "the text that was classified; only predictions' hashes are stored otherwise."
+        ),
+    )
+
+
+class FeedbackResponse(BaseModel):
+    id: int
+    prediction_id: uuid.UUID
+    label: str
+    predicted_label: str
+    model_was_correct: bool
+    text_stored: bool
 
 
 class Limits(BaseModel):
@@ -79,6 +107,9 @@ class ModelInfoResponse(BaseModel):
 
 class StatusResponse(BaseModel):
     status: str
+    database: str | None = Field(
+        default=None, description="ok, unavailable, or disabled (no DATABASE_URL)."
+    )
 
 
 class ErrorDetail(BaseModel):

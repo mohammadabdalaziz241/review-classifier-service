@@ -1,0 +1,20 @@
+# Only what the image needs: pyproject.toml, README.md, src/ and models/.
+.git
+.github
+.venv
+.env
+.env.*
+**/__pycache__
+**/*.pyc
+*.egg-info
+.pytest_cache
+.ruff_cache
+**/.DS_Store
+checkpoints/
+reports/
+results/
+notebooks/
+scripts/
+tests/
+compose.yaml
+Dockerfile

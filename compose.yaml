@@ -1,0 +1,73 @@
+# Local stack: PostgreSQL + a one-off migration job + the API.
+#
+#   cp .env.example .env      # choose the model and a database password
+#   docker compose up --build
+#
+# The API is on http://127.0.0.1:8000. PostgreSQL is reachable only inside the
+# stack:  docker compose exec db psql -U reviews reviews
+
+name: review-classifier
+
+x-image: &image
+  image: review-classifier:${IMAGE_TAG:-local}
+  build:
+    context: .
+    args:
+      PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+      TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+      MODEL_BACKEND: ${MODEL_BACKEND:-hf}
+      MODEL_ID: ${MODEL_ID:-}
+      MODEL_REVISION: ${MODEL_REVISION:-}
+    # Private Hub models: HF_TOKEN from your shell, mounted only while fetching the model.
+    secrets: [hf_token]
+
+x-database-url: &database-url postgresql://reviews:${POSTGRES_PASSWORD:-reviews-local-only}@db:5432/reviews
+
+services:
+  db:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      POSTGRES_DB: reviews
+      POSTGRES_USER: reviews
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-reviews-local-only}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reviews -d reviews"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  # Applies database migrations, then exits. The API starts only if it succeeds.
+  migrate:
+    <<: *image
+    command: ["python", "-m", "review_classifier.db", "--wait", "60", "upgrade"]
+    environment:
+      DATABASE_URL: *database-url
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: *image
+    environment:
+      DATABASE_URL: *database-url
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    init: true
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+
+secrets:
+  hf_token:
+    environment: HF_TOKEN

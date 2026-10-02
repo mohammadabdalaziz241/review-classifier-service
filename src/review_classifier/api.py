@@ -12,7 +12,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -27,6 +27,8 @@ from .schemas import (
     BatchPredictRequest,
     BatchPredictResponse,
     ErrorResponse,
+    FeedbackRequest,
+    FeedbackResponse,
     Limits,
     ModelInfoResponse,
     ModelRef,
@@ -37,6 +39,9 @@ from .schemas import (
     StatusResponse,
 )
 from .serving_config import resolve_preprocessing
+
+if TYPE_CHECKING:  # the database layer is optional: pip install '.[db]'
+    from .store import PredictionStore
 
 logger = logging.getLogger("review_classifier")
 
@@ -88,21 +93,40 @@ def _validation_details(errors: Sequence[dict[str, Any]]) -> list[dict[str, Any]
     ]
 
 
-def _out(prediction: Prediction) -> PredictionOut:
+def _out(prediction: Prediction, prediction_id: uuid.UUID) -> PredictionOut:
     return PredictionOut(
+        id=prediction_id,
         label=prediction.label,
         score=round(prediction.score, _SCORE_DECIMALS),
         scores={k: round(v, _SCORE_DECIMALS) for k, v in prediction.scores.items()},
     )
 
 
-def create_app(settings: Settings | None = None, predictor: Predictor | None = None) -> FastAPI:
+def _open_store(settings: Settings) -> PredictionStore | None:
+    if not settings.database_url:
+        return None
+    try:
+        from .store import PredictionStore
+    except ImportError as exc:
+        raise RuntimeError(
+            "DATABASE_URL is set but the database extra is not installed: pip install '.[db]'"
+        ) from exc
+    return PredictionStore(settings.database_url)
+
+
+def create_app(
+    settings: Settings | None = None,
+    predictor: Predictor | None = None,
+    store: PredictionStore | None = None,
+) -> FastAPI:
     """Build the application.
 
-    ``predictor`` can be injected (tests do this); otherwise it is created from
-    ``settings`` at startup. A model that fails to load stops the service from
+    ``predictor`` and ``store`` can be injected (tests do this); otherwise they
+    are created from ``settings`` at startup. A model that fails to load, or a
+    database whose schema does not match this code, stops the service from
     starting, so an orchestrator sees a failed deployment rather than a running
-    container that answers every request with an error.
+    container that answers every request with an error. An unreachable database
+    does not: predictions are still served, just not recorded.
     """
     settings = settings or Settings.from_env()
 
@@ -141,8 +165,19 @@ def create_app(settings: Settings | None = None, predictor: Predictor | None = N
             )
         if info.backend == "dummy":
             logger.warning("Running the dummy keyword backend: predictions are not a real model.")
-        yield
-        app.state.predictor = None
+
+        app.state.store = store or _open_store(settings)
+        if app.state.store is None:
+            logger.info("DATABASE_URL not set: predictions are not recorded")
+        else:
+            app.state.store.check_schema()
+        try:
+            yield
+        finally:
+            if app.state.store is not None:
+                app.state.store.close()
+            app.state.store = None
+            app.state.predictor = None
 
     app = FastAPI(
         title="Review Classifier Service",
@@ -153,6 +188,7 @@ def create_app(settings: Settings | None = None, predictor: Predictor | None = N
     )
     app.state.settings = settings
     app.state.predictor = None
+    app.state.store = None
     app.state.preprocessing, app.state.preprocessing_source = resolve_preprocessing(
         settings.preprocessing_overrides(), None
     )
@@ -248,6 +284,45 @@ def create_app(settings: Settings | None = None, predictor: Predictor | None = N
     def model_ref(model: Predictor) -> ModelRef:
         return ModelRef(id=model.info.model_id, version=model.info.version)
 
+    def record(
+        request: Request,
+        model: Predictor,
+        endpoint: str,
+        raw_texts: Sequence[str],
+        predictions: Sequence[Prediction],
+        elapsed_ms: float,
+    ) -> tuple[list[uuid.UUID], bool]:
+        """Give each prediction an id and store it if a database is configured."""
+        ids = [uuid.uuid4() for _ in predictions]
+        current_store = request.app.state.store
+        if current_store is None:
+            return ids, False
+        from .store import PredictionRecord, text_sha256
+
+        info = model.info
+        rows = [
+            PredictionRecord(
+                id=prediction_id,
+                request_id=request.state.request_id,
+                endpoint=endpoint,
+                batch_index=i,
+                batch_size=len(predictions),
+                model_id=info.model_id,
+                model_version=info.version,
+                task=info.task,
+                label=p.label,
+                score=p.score,
+                scores=dict(p.scores),
+                text_sha256=text_sha256(raw),
+                text_chars=len(raw),
+                inference_ms=elapsed_ms,
+            )
+            for i, (prediction_id, raw, p) in enumerate(
+                zip(ids, raw_texts, predictions, strict=True)
+            )
+        ]
+        return ids, current_store.record(rows)
+
     def run(model: Predictor, texts: list[str]) -> tuple[list[Prediction], float]:
         started = time.perf_counter()
         predictions = model.predict(texts)
@@ -260,16 +335,24 @@ def create_app(settings: Settings | None = None, predictor: Predictor | None = N
     # Inference routes are sync functions: FastAPI runs them in a worker thread,
     # so a slow forward pass does not block the event loop.
 
-    @app.get("/health", response_model=StatusResponse, tags=["ops"])
+    @app.get(
+        "/health", response_model=StatusResponse, response_model_exclude_none=True, tags=["ops"]
+    )
     def health() -> StatusResponse:
         """Liveness: the process is up and serving HTTP."""
         return StatusResponse(status="ok")
 
     @app.get("/ready", response_model=StatusResponse, tags=["ops"])
     def ready(request: Request) -> StatusResponse:
-        """Readiness: the model is loaded and requests can be served."""
+        """Readiness: the model is loaded and requests can be served.
+
+        The database is reported but does not affect readiness: predictions are
+        served while it is down, they are just not recorded.
+        """
         get_predictor(request)
-        return StatusResponse(status="ready")
+        current_store = request.app.state.store
+        database = "disabled" if current_store is None else current_store.status
+        return StatusResponse(status="ready", database=database)
 
     @app.get("/v1/model", response_model=ModelInfoResponse, tags=["model"])
     def model_info(request: Request) -> ModelInfoResponse:
@@ -298,11 +381,13 @@ def create_app(settings: Settings | None = None, predictor: Predictor | None = N
         model = get_predictor(request)
         texts = prepare(request, [body.text], "text", indexed=False)
         predictions, elapsed_ms = run(model, texts)
+        ids, recorded = record(request, model, "predict", [body.text], predictions, elapsed_ms)
         return PredictResponse(
             request_id=request.state.request_id,
             model=model_ref(model),
-            prediction=_out(predictions[0]),
+            prediction=_out(predictions[0], ids[0]),
             inference_ms=elapsed_ms,
+            recorded=recorded,
         )
 
     @app.post("/v1/predict/batch", response_model=BatchPredictResponse, tags=["inference"])
@@ -323,11 +408,77 @@ def create_app(settings: Settings | None = None, predictor: Predictor | None = N
             )
         texts = prepare(request, body.texts, "texts", indexed=True)
         predictions, elapsed_ms = run(model, texts)
+        ids, recorded = record(request, model, "predict_batch", body.texts, predictions, elapsed_ms)
         return BatchPredictResponse(
             request_id=request.state.request_id,
             model=model_ref(model),
-            predictions=[_out(p) for p in predictions],
+            predictions=[_out(p, i) for p, i in zip(predictions, ids, strict=True)],
             inference_ms=elapsed_ms,
+            recorded=recorded,
+        )
+
+    @app.post(
+        "/v1/feedback",
+        response_model=FeedbackResponse,
+        status_code=201,
+        tags=["feedback"],
+        responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+    )
+    def add_feedback(body: FeedbackRequest, request: Request) -> FeedbackResponse:
+        """Record the correct label for a recorded prediction."""
+        current_store = request.app.state.store
+        if current_store is None:
+            raise APIError(
+                503, "feedback_unavailable", "Feedback needs a database; DATABASE_URL is not set."
+            )
+        if body.text is not None and len(body.text) > settings.max_text_chars:
+            raise APIError(
+                422,
+                "invalid_request",
+                "The request body is invalid.",
+                [
+                    {
+                        "loc": ["body", "text"],
+                        "msg": f"Text is longer than {settings.max_text_chars} characters.",
+                        "type": "text_too_long",
+                    }
+                ],
+            )
+        from .store import (
+            FeedbackExistsError,
+            InvalidFeedbackError,
+            PredictionNotFoundError,
+            StoreUnavailableError,
+        )
+
+        try:
+            result = current_store.add_feedback(body.prediction_id, body.label, body.text)
+        except PredictionNotFoundError as exc:
+            raise APIError(
+                404, "prediction_not_found", "No recorded prediction has this id."
+            ) from exc
+        except FeedbackExistsError as exc:
+            raise APIError(
+                409, "feedback_exists", "Feedback for this prediction was already recorded."
+            ) from exc
+        except InvalidFeedbackError as exc:
+            raise APIError(
+                422,
+                "invalid_request",
+                "The request body is invalid.",
+                [{"loc": ["body", exc.field], "msg": str(exc), "type": exc.kind}],
+            ) from exc
+        except StoreUnavailableError as exc:
+            raise APIError(
+                503, "database_unavailable", "The database is unavailable; try again later."
+            ) from exc
+        return FeedbackResponse(
+            id=result.id,
+            prediction_id=result.prediction_id,
+            label=result.label,
+            predicted_label=result.predicted_label,
+            model_was_correct=result.model_was_correct,
+            text_stored=result.text_stored,
         )
 
     return app

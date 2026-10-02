@@ -9,17 +9,14 @@ BESSTIE-CW-26 dataset across British, Australian and Indian English).
 The research already exists. This repository turns the strongest efficient model, pooled
 RoBERTa-base, into a service: a reproducible training script that keeps the model, a serving
 path proven to reproduce the training metrics, input validation, consistent errors, exact
-model versioning and tests. Later milestones add containers, a database, cloud deployment,
-CI/CD and measured performance.
+model versioning, a Docker image that serves a pinned model offline, PostgreSQL records of
+every prediction and of user feedback, and tests for all of it. Later milestones add cloud
+deployment, a release pipeline and measured performance.
 
-> **Status:** milestones 1 and 1b done: a tested local service serving the project's own
-> retrained RoBERTa models, with served test metrics verified against training
-> ([results](#results)). Nothing here is deployed yet. See the [roadmap](#roadmap).
-
-> **Deployment:** the RoBERTa models from this study are retrained, published on the
-> Hugging Face Hub, and served by a tested FastAPI service in
-> [review-classifier-service](https://github.com/mohammadabdalaziz241/review-classifier-service),
-> which verifies that served predictions reproduce the test metrics.
+> **Status:** milestones 1–3 done: the project's own retrained RoBERTa models, served metrics
+> verified against training ([results](#results)), packaged as a Docker image and run with
+> PostgreSQL through Docker Compose. Nothing here is deployed to the cloud yet. See the
+> [roadmap](#roadmap).
 
 ## Results
 
@@ -82,6 +79,65 @@ MODEL_REVISION=43da49621dc65cdd7cd11f77c8c2e7eb13d06cbb python -m review_classif
 MODEL_ID=Mohammadeeu20/besstie-roberta-sarcasm \
 MODEL_REVISION=dedc10bff5817a4a84f0500150b85b99a4225ecb python -m review_classifier
 ```
+
+To run the whole stack with a database instead, see [Run with Docker](#run-with-docker).
+
+## Run with Docker
+
+Needs Docker Desktop (or Docker Engine with Compose v2). One command starts PostgreSQL, applies
+the database migrations, and starts the API with the chosen model baked into the image:
+
+```bash
+cp .env.example .env          # pick the model; set POSTGRES_PASSWORD
+export HF_TOKEN=<your token>  # only for private Hub models; used at build time only
+docker compose up --build
+```
+
+The API is on <http://127.0.0.1:8000> (`/docs` for the OpenAPI page). The first build
+downloads PyTorch and the model and takes a few minutes; later builds reuse the cached layers.
+
+```bash
+python scripts/smoke_test.py --expect-database   # end-to-end check of the running stack
+docker compose exec db psql -U reviews reviews   # look at the recorded predictions
+docker compose down                              # stop (add --volumes to delete the data)
+```
+
+To try the stack without a model download, set `MODEL_BACKEND=dummy` in `.env`. After
+changing the model in `.env`, run `docker compose up --build` again so the image is rebuilt.
+PostgreSQL sets its password when the `pgdata` volume is first created; to change
+`POSTGRES_PASSWORD` later, remove the volume with `docker compose down --volumes`.
+
+### The image
+
+| Choice | Why |
+| --- | --- |
+| **The model is baked in at build time** and loaded with `HF_HUB_OFFLINE=1` | A container starts the same way every time and needs no network or Hub token at runtime. Each image serves exactly one model version, which `/v1/model` reports. |
+| **The build proves the model works** (`python -m review_classifier.prefetch`) | After downloading, the build loads the model offline and runs a test prediction. A model with missing files or the wrong head fails the build, not the deployment. |
+| **The Hugging Face token is a build secret** | It is mounted only for the download step and is not stored in any image layer or the image history. |
+| **CPU-only PyTorch** in its own layer | Several GB smaller than the default CUDA build, and code changes do not reinstall it. `TORCH_INDEX_URL` selects another build. |
+| **Multi-stage, non-root** | The runtime stage has the virtualenv and the model only, runs as uid 10001, and the model files are read-only to the service. |
+| **`HEALTHCHECK` on `/ready`** | Healthy means the model is loaded. A database outage does not make the container unhealthy, because predictions are still served. |
+
+To build the image on its own:
+
+```bash
+docker build -t review-classifier:sentiment \
+  --build-arg MODEL_ID=Mohammadeeu20/besstie-roberta-sentiment \
+  --build-arg MODEL_REVISION=43da49621dc65cdd7cd11f77c8c2e7eb13d06cbb \
+  --secret id=hf_token,env=HF_TOKEN .
+docker run --rm -p 127.0.0.1:8000:8000 review-classifier:sentiment
+```
+
+`MODEL_ID` can also be a checkpoint directory placed under [`models/`](models/README.md) in the
+build context, e.g. `MODEL_ID=/opt/models/my-checkpoint`; CI uses this to bake in a tiny model.
+
+### Compose services
+
+| Service | What it does |
+| --- | --- |
+| `db` | PostgreSQL 16, data in the `pgdata` volume, not published to the host |
+| `migrate` | `python -m review_classifier.db --wait 60 upgrade`, then exits. The API starts only if it succeeds |
+| `api` | The service, published on `127.0.0.1` only, restarted if it stops |
 
 ## Train the project's model
 
@@ -166,10 +222,11 @@ with a higher limit; the model truncates by tokens anyway.
 | Method | Path                | Purpose                                                   |
 | ------ | ------------------- | --------------------------------------------------------- |
 | GET    | `/health`           | Liveness: the process is serving HTTP                     |
-| GET    | `/ready`            | Readiness: the model is loaded (`503` until it is)        |
+| GET    | `/ready`            | Readiness: the model is loaded (`503` until it is), plus database status |
 | GET    | `/v1/model`         | Model id, exact version, labels, serving contract, limits |
 | POST   | `/v1/predict`       | Classify one text                                         |
 | POST   | `/v1/predict/batch` | Classify up to `MAX_BATCH_SIZE` texts, order preserved    |
+| POST   | `/v1/feedback`      | Record the correct label for a prediction (needs a database) |
 
 ```bash
 curl -s localhost:8000/v1/predict \
@@ -182,16 +239,58 @@ curl -s localhost:8000/v1/predict \
   "request_id": "5f0c9a1e2b7d4c3a9e8f6d1b2a3c4d5e",
   "model": {"id": "<hf-user>/besstie-roberta-sentiment", "version": "<commit hash>"},
   "prediction": {
+    "id": "0308693e-b3a3-4f41-b70e-e016e2d17855",
     "label": "positive",
     "score": 0.97,
     "scores": {"negative": 0.03, "positive": 0.97}
   },
-  "inference_ms": 41.2
+  "inference_ms": 41.2,
+  "recorded": true
 }
 ```
 
 The scores above are illustrative. Every response records which model **and which exact
 version** produced it, so a prediction can always be traced back to the weights that made it.
+Every prediction has an `id`; `recorded` says whether it was stored in the database.
+
+### Recording predictions and feedback
+
+With `DATABASE_URL` set, every prediction is stored in PostgreSQL with the request id, the
+model id and exact version, the label and all scores, the inference time, and the batch
+position. **The review text is not stored**, only its SHA-256 and length, because reviews can
+contain personal data.
+
+Clients can then report the correct label:
+
+```bash
+curl -s localhost:8000/v1/feedback -H 'Content-Type: application/json' \
+  -d '{"prediction_id": "0308693e-…", "label": "negative", "text": "Proper brilliant, would buy again"}'
+```
+
+```json
+{"id": 1, "prediction_id": "0308693e-…", "label": "negative", "predicted_label": "positive",
+ "model_was_correct": false, "text_stored": true}
+```
+
+`text` is optional. When it is sent, it is kept as a labelled example for retraining, but only
+if its hash matches the prediction's, so a stored example is always the exact text the model
+classified. The label must be one of the model's labels, and each prediction takes feedback
+once (a second attempt is `409`). Joined on `prediction_id`, the two tables give the deployed
+model's accuracy on real traffic, per model version.
+
+| Table | Columns |
+| --- | --- |
+| `predictions` | `id` (UUID), `created_at`, `request_id`, `endpoint`, `batch_index`, `batch_size`, `model_id`, `model_version`, `task`, `label`, `score`, `scores` (JSONB), `text_sha256`, `text_chars`, `inference_ms` |
+| `feedback` | `id`, `prediction_id` (unique, references `predictions`), `created_at`, `label`, `text` (optional) |
+
+**Serving does not depend on the database.** If PostgreSQL is down, predictions are still
+returned with `recorded: false`, `/ready` reports `"database": "unavailable"`, and feedback
+returns `503`. After a connection failure the service stops trying for 30 seconds, so an
+outage adds no latency, then resumes recording on its own when the database is back.
+
+**The schema is managed by migrations** (Alembic), applied with
+`python -m review_classifier.db upgrade`. At startup the service checks the schema version
+and refuses to start against a database that has not been migrated to the version it needs.
 
 ### Model versions
 
@@ -260,11 +359,15 @@ one envelope with a stable `code`:
 
 | Code                 | Status | When                                                    |
 | -------------------- | ------ | ------------------------------------------------------- |
-| `invalid_request`    | 422    | Malformed JSON, wrong types, unknown fields, blank or over-long text |
+| `invalid_request`    | 422    | Malformed JSON, wrong types, unknown fields, blank or over-long text, invalid feedback label or text |
 | `batch_too_large`    | 422    | More texts than `MAX_BATCH_SIZE`                        |
 | `model_not_ready`    | 503    | Request arrived before the model finished loading       |
 | `not_found`          | 404    | Unknown route                                           |
 | `method_not_allowed` | 405    | Wrong HTTP method                                       |
+| `prediction_not_found` | 404  | Feedback for an id that was never recorded              |
+| `feedback_exists`    | 409    | Feedback for this prediction was already recorded       |
+| `feedback_unavailable` | 503  | Feedback sent to a service without `DATABASE_URL`       |
+| `database_unavailable` | 503  | Feedback sent while the database is down                |
 | `internal_error`     | 500    | Unexpected failure; details are logged, never returned  |
 
 A batch with several bad items reports all of them, by index, in one response.
@@ -288,6 +391,7 @@ All settings are environment variables, validated at startup.
 | `HF_TOKEN`             | unset                                               | Needed for private Hub repositories |
 | `HF_HUB_OFFLINE`       | unset                                               | `1` loads from the local Hugging Face cache only; pin `MODEL_REVISION` to a commit |
 | `DEVICE`               | `auto`                                              | `auto`, `cpu`, `cuda` or `mps` |
+| `DATABASE_URL`         | unset (nothing recorded)                            | e.g. `postgresql://user:password@host:5432/db`; needs the `[db]` extra. Never logged with its password |
 | `MAX_TEXT_CHARS`       | `2000`                                              | Per-text limit, checked before tokenisation |
 | `MAX_BATCH_SIZE`       | `32`                                                | Texts per batch request |
 | `INFERENCE_BATCH_SIZE` | `16`                                                | Texts per forward pass |
@@ -331,16 +435,31 @@ tokenizer unchanged, which is what the project's RoBERTa models were trained on.
 - **Limits are enforced before tokenisation**, so oversized input is rejected cheaply.
 - **Inference runs off the event loop.** Inference routes are sync functions, which FastAPI
   runs in a worker thread, so `/health` stays responsive during a slow forward pass.
-- **Review text is never logged**, because reviews can contain personal data. Logs contain
-  request IDs, paths, status codes and timings only.
+- **Review text is never logged or stored by default**, because reviews can contain personal
+  data. Logs contain request IDs, paths, status codes and timings; the database stores a hash.
+  Text is kept only when a client sends it with feedback, and only if it matches the hash.
+- **The database is not on the serving path's critical path.** Recording failures degrade to
+  `recorded: false` and back off instead of failing requests or adding timeouts. Feedback, which
+  is meaningless without the database, is the only endpoint that fails when it is down.
+- **Schema changes are migrations, checked at startup.** The service never creates or alters
+  tables itself, and will not run against a schema version it does not expect.
+- **The image is the unit of deployment.** The model is fetched, verified and frozen at build
+  time; at runtime the container needs no network, token or writable model storage.
 
 ## Tests
 
 ```bash
-pytest -m "not hf"     # API, validation, preprocessing, config, metrics, evaluation — no torch
+pytest -m "not hf"     # API, validation, preprocessing, config, metrics, evaluation, database
 pytest -m hf           # real transformers code paths; needs the [hf,train] extras
+TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/test pytest -m postgres
 ruff check . && ruff format --check .
 ```
+
+The database tests run against SQLite by default and also against PostgreSQL when
+`TEST_DATABASE_URL` is set. Each starts from an empty database migrated to the current
+schema; they cover migrations in both directions, recording, every feedback rule, the
+no-text-stored guarantee, the outage back-off and recovery, and startup against an
+unmigrated or unreachable database.
 
 No test needs network access. The `hf` tests build a tiny BERT classifier and a synthetic
 dataset with BESSTIE-CW-26's columns, then run the real **train → serve → evaluate** loop on
@@ -350,8 +469,11 @@ overriding environment variable is visible in the evaluation, and that real mode
 batching, padding, truncation, version hashing and startup failures behave correctly. The
 metrics are checked against scikit-learn, which the notebook used.
 
-CI (GitHub Actions) runs lint, the fast suite on Python 3.10–3.12, and the model tests on
-CPU-only torch.
+CI (GitHub Actions) runs lint, the fast suite on Python 3.10–3.12, the database tests on
+PostgreSQL 16, the model tests on CPU-only torch, and a Docker job that builds the real image
+with a model baked in, starts the Compose stack, and runs
+[`scripts/smoke_test.py`](scripts/smoke_test.py) against it: predictions, errors, recording,
+and the feedback round trip.
 
 ## Project layout
 
@@ -365,9 +487,18 @@ src/review_classifier/
   preprocessing.py   text preprocessing
   schemas.py         request and response models (the API contract)
   metrics.py         macro-F1 and friends, shared by training and evaluation
+  store.py           prediction and feedback storage, outage back-off
+  db.py              `python -m review_classifier.db`: database migrations
+  migrations/        Alembic migrations (the schema)
+  prefetch.py        `python -m review_classifier.prefetch`: fetch + verify the model (image build)
   train.py           `python -m review_classifier.train`: the notebook recipe, kept
   evaluate.py        `python -m review_classifier.evaluate`: served vs training metrics
   __main__.py        `python -m review_classifier`: start the service
+Dockerfile           multi-stage image with the model baked in
+compose.yaml         PostgreSQL + migrations + API
+.env.example         model and password settings for Compose
+models/              optional local checkpoints to bake into the image
+scripts/smoke_test.py  end-to-end check of a running service
 notebooks/
   train_on_colab.ipynb  train, verify and publish on a free Colab GPU
 results/             manifests and evaluation reports of the published models
@@ -379,8 +510,10 @@ tests/               unit and integration tests
 - [x] **1. Local service** — FastAPI endpoints, validation, error handling, tests, CI
 - [x] **1b. Own model** — pooled RoBERTa sentiment and sarcasm models retrained, published
       at pinned commits, and served metrics verified against training
-- [ ] **2. Packaging** — Dockerfile, Docker Compose for local development
-- [ ] **3. Persistence** — PostgreSQL for inference metadata and optional labelled feedback
+- [x] **2. Packaging** — multi-stage Docker image with the model baked in and verified at
+      build time; Docker Compose stack; CI builds it and smoke-tests the running stack
+- [x] **3. Persistence** — PostgreSQL records of every prediction, labelled feedback with
+      hash-checked text, Alembic migrations, graceful degradation when the database is down
 - [ ] **4. Cloud** — AWS deployment with storage, container hosting, IAM and logging
 - [ ] **5. Operations** — release pipeline, metrics, and a reproducible benchmark of
       latency, throughput, memory and error rate, with the conditions stated
