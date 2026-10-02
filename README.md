@@ -16,6 +16,11 @@ CI/CD and measured performance.
 > retrained RoBERTa models, with served test metrics verified against training
 > ([results](#results)). Nothing here is deployed yet. See the [roadmap](#roadmap).
 
+> **Deployment:** the RoBERTa models from this study are retrained, published on the
+> Hugging Face Hub, and served by a tested FastAPI service in
+> [review-classifier-service](https://github.com/mohammadabdalaziz241/review-classifier-service),
+> which verifies that served predictions reproduce the test metrics.
+
 ## Results
 
 Pooled RoBERTa-base retrained with the project notebook's recipe (seed 42, one Colab T4,
