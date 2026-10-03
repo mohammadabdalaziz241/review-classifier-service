@@ -1,0 +1,62 @@
+# Production stack on the EC2 instance. The image comes from ECR (the release
+# recorded in SSM by the Deploy workflow); .env is written by start.sh.
+# Container logs go to CloudWatch, one stream per container.
+
+name: review-classifier
+
+x-logging: &logging
+  driver: awslogs
+  options:
+    awslogs-region: ${AWS_REGION}
+    awslogs-group: ${LOG_GROUP}
+    tag: "{{.Name}}"
+
+x-database-url: &database-url postgresql://reviews:${POSTGRES_PASSWORD}@db:5432/reviews
+
+services:
+  db:
+    # Docker's official image, served from the ECR Public mirror (no Docker Hub limits).
+    image: public.ecr.aws/docker/library/postgres:16-alpine
+    environment:
+      POSTGRES_DB: reviews
+      POSTGRES_USER: reviews
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reviews -d reviews"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+    logging: *logging
+
+  migrate:
+    image: ${IMAGE:?IMAGE is not set}
+    command: ["python", "-m", "review_classifier.db", "--wait", "60", "upgrade"]
+    environment:
+      DATABASE_URL: *database-url
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    logging: *logging
+
+  api:
+    image: ${IMAGE:?IMAGE is not set}
+    environment:
+      DATABASE_URL: *database-url
+      LOG_LEVEL: info
+    ports:
+      - "80:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    init: true
+    restart: unless-stopped
+    logging: *logging
+
+volumes:
+  pgdata:

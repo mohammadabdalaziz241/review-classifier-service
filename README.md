@@ -10,12 +10,13 @@ The research already exists. This repository turns the strongest efficient model
 RoBERTa-base, into a service: a reproducible training script that keeps the model, a serving
 path proven to reproduce the training metrics, input validation, consistent errors, exact
 model versioning, a Docker image that serves a pinned model offline, PostgreSQL records of
-every prediction and of user feedback, and tests for all of it. Later milestones add cloud
-deployment, a release pipeline and measured performance.
+every prediction and of user feedback, an on-demand AWS deployment defined in Terraform, and
+tests for all of it. A later milestone adds monitoring and measured performance.
 
 > **Status:** milestones 1–3 done: the project's own retrained RoBERTa models, served metrics
 > verified against training ([results](#results)), packaged as a Docker image and run with
-> PostgreSQL through Docker Compose. Nothing here is deployed to the cloud yet. See the
+> PostgreSQL through Docker Compose. Milestone 4, the AWS deployment, is written and tested
+> against an AWS emulator; the first deployment to a real account is next. See the
 > [roadmap](#roadmap).
 
 ## Results
@@ -138,6 +139,26 @@ build context, e.g. `MODEL_ID=/opt/models/my-checkpoint`; CI uses this to bake i
 | `db` | PostgreSQL 16, data in the `pgdata` volume, not published to the host |
 | `migrate` | `python -m review_classifier.db --wait 60 upgrade`, then exits. The API starts only if it succeeds |
 | `api` | The service, published on `127.0.0.1` only, restarted if it stops |
+
+## Deploy to AWS
+
+The same stack runs on one EC2 instance that you start for a demo and stop afterwards. It
+is defined in Terraform ([`infra/`](infra/)) and released by a GitHub Actions workflow:
+
+- **Release:** *Actions → Deploy* builds the image with a pinned model, pushes it to ECR,
+  records its digest in SSM Parameter Store, and, if the instance is running, rolls it out
+  over Session Manager and smoke-tests the live URL. GitHub signs in to AWS with OIDC, so
+  no AWS keys are stored anywhere.
+- **Run:** `scripts/aws.sh start` boots the instance, which pulls the recorded release and
+  starts PostgreSQL, the migrations and the API, then prints the URL. `scripts/aws.sh stop`
+  stops it and keeps the data.
+- **Cost guard:** a CloudWatch alarm stops the instance after two quiet hours, and an AWS
+  Budget emails at $10 of monthly usage. Running costs about $0.10 an hour; stopped, about
+  $2 a month for the disk and images.
+- **Locked down:** no SSH port, IMDSv2 only, least-privilege roles, logs in CloudWatch.
+
+Setup, everyday commands, a cost breakdown and teardown are in
+[`infra/README.md`](infra/README.md).
 
 ## Train the project's model
 
@@ -469,7 +490,8 @@ overriding environment variable is visible in the evaluation, and that real mode
 batching, padding, truncation, version hashing and startup failures behave correctly. The
 metrics are checked against scikit-learn, which the notebook used.
 
-CI (GitHub Actions) runs lint, the fast suite on Python 3.10–3.12, the database tests on
+CI (GitHub Actions) runs lint, Terraform validation and shellcheck of the deployment code,
+the fast suite on Python 3.10–3.12, the database tests on
 PostgreSQL 16, the model tests on CPU-only torch, and a Docker job that builds the real image
 with a model baked in, starts the Compose stack, and runs
 [`scripts/smoke_test.py`](scripts/smoke_test.py) against it: predictions, errors, recording,
@@ -498,6 +520,8 @@ Dockerfile           multi-stage image with the model baked in
 compose.yaml         PostgreSQL + migrations + API
 .env.example         model and password settings for Compose
 models/              optional local checkpoints to bake into the image
+infra/               Terraform for AWS, instance start-up files, and the runbook
+scripts/aws.sh       start, stop and inspect the AWS deployment
 scripts/smoke_test.py  end-to-end check of a running service
 notebooks/
   train_on_colab.ipynb  train, verify and publish on a free Colab GPU
@@ -514,8 +538,10 @@ tests/               unit and integration tests
       build time; Docker Compose stack; CI builds it and smoke-tests the running stack
 - [x] **3. Persistence** — PostgreSQL records of every prediction, labelled feedback with
       hash-checked text, Alembic migrations, graceful degradation when the database is down
-- [ ] **4. Cloud** — AWS deployment with storage, container hosting, IAM and logging
-- [ ] **5. Operations** — release pipeline, metrics, and a reproducible benchmark of
+- [ ] **4. Cloud** — on-demand AWS deployment: Terraform, ECR, EC2 with Session Manager,
+      OIDC release workflow, CloudWatch logs, idle auto-stop, budget alert.
+      *Written and tested against an AWS emulator; first real deployment pending.*
+- [ ] **5. Operations** — metrics and monitoring, and a reproducible benchmark of
       latency, throughput, memory and error rate, with the conditions stated
 - [ ] Later: the per-variety Gemma-2-2B LoRA sarcasm adapters with adapter switching,
       carried over from the Gradio app (needs a CUDA GPU)

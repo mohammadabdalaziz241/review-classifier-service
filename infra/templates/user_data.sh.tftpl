@@ -1,0 +1,35 @@
+#!/bin/bash
+# First-boot setup of the instance, rendered by Terraform.
+# Output: /var/log/cloud-init-output.log (or: scripts/aws.sh shell, then sudo cat it).
+set -euxo pipefail
+
+dnf install -y docker
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -fsSL --retry 5 -o /usr/local/lib/docker/cli-plugins/docker-compose \
+  "https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-linux-x86_64"
+chmod 755 /usr/local/lib/docker/cli-plugins/docker-compose
+systemctl enable --now docker
+
+# 2 GiB of swap as a safety margin on the 4 GiB instance.
+if [ ! -f /swapfile ]; then
+  fallocate -l 2G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
+install -d -m 755 /opt/review-classifier
+cd /opt/review-classifier
+echo '${compose_b64}' | base64 -d > compose.yaml
+echo '${start_b64}' | base64 -d > start.sh
+chmod 755 start.sh
+cat > instance.env <<'ENV'
+AWS_REGION=${region}
+PARAM_PREFIX=${param_prefix}
+LOG_GROUP=${log_group}
+ENV
+
+echo '${unit_b64}' | base64 -d > /etc/systemd/system/review-classifier.service
+systemctl daemon-reload
+systemctl enable --now review-classifier.service

@@ -1,0 +1,150 @@
+name: Deploy
+
+# Builds the image with the chosen model, pushes it to ECR and records it as the
+# release. If the instance is running, it is updated at once and smoke-tested;
+# if it is stopped, it runs this release the next time it starts.
+#
+# Needs (Settings > Secrets and variables > Actions):
+#   variable AWS_ROLE_ARN  terraform output github_deploy_role_arn
+#   variable AWS_REGION    e.g. eu-north-1
+#   secret   HF_TOKEN      Hugging Face read token (the models are private)
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Model to serve (pinned in results/roberta-<model>-seed42/hub.env)
+        type: choice
+        options: [sentiment, sarcasm]
+        default: sentiment
+
+permissions:
+  id-token: write # sign in to AWS with OIDC, no stored keys
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  PROJECT: review-classifier
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check configuration
+        env:
+          ROLE: ${{ vars.AWS_ROLE_ARN }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          missing=""
+          [ -n "$ROLE" ] || missing="$missing variable:AWS_ROLE_ARN"
+          [ -n "$AWS_REGION" ] || missing="$missing variable:AWS_REGION"
+          [ -n "$HF_TOKEN" ] || missing="$missing secret:HF_TOKEN"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository settings:$missing (see infra/README.md)"
+            exit 1
+          fi
+
+      - name: Pick the model
+        id: model
+        env:
+          MODEL: ${{ inputs.model }}
+        run: |
+          # The verified model id and commit, written by the training notebook.
+          cat "results/roberta-${MODEL}-seed42/hub.env" >> "$GITHUB_OUTPUT"
+          cat "results/roberta-${MODEL}-seed42/hub.env"
+          # ECR tags are immutable, so each run (and re-run) gets its own tag.
+          echo "tag=${MODEL}-${GITHUB_SHA::7}-${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          provenance: false
+          tags: ${{ steps.ecr.outputs.registry }}/${{ env.PROJECT }}:${{ steps.model.outputs.tag }}
+          build-args: |
+            MODEL_ID=${{ steps.model.outputs.MODEL_ID }}
+            MODEL_REVISION=${{ steps.model.outputs.MODEL_REVISION }}
+          secrets: |
+            hf_token=${{ secrets.HF_TOKEN }}
+          cache-from: type=gha,scope=${{ inputs.model }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.model }}
+
+      - name: Record the release
+        id: release
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/${{ env.PROJECT }}@${{ steps.build.outputs.digest }}
+        run: |
+          aws ssm put-parameter --name "/$PROJECT/image" --type String --overwrite --value "$IMAGE" > /dev/null
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "Release: $IMAGE"
+
+      - name: Roll out if the instance is running
+        id: rollout
+        run: |
+          id=$(aws ec2 describe-instances \
+            --filters "Name=tag:Project,Values=$PROJECT" "Name=instance-state-name,Values=running" \
+            --query 'Reservations[].Instances[].InstanceId' --output text)
+          if [ -z "$id" ]; then
+            echo "The instance is stopped; it will run this release when it next starts."
+            echo "running=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          command_id=$(aws ssm send-command --instance-ids "$id" \
+            --document-name AWS-RunShellScript \
+            --comment "deploy ${{ github.sha }}" \
+            --parameters 'commands=["/opt/review-classifier/start.sh"]' \
+            --query Command.CommandId --output text)
+          status=Pending
+          for _ in $(seq 1 90); do
+            sleep 10
+            status=$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$id" \
+              --query Status --output text 2>/dev/null || echo Pending)
+            case "$status" in Pending|InProgress|Delayed) continue ;; *) break ;; esac
+          done
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$id" \
+            --query '[StandardOutputContent, StandardErrorContent]' --output text | tail -20
+          if [ "$status" != "Success" ]; then
+            echo "::error::Roll-out ended with status $status"
+            exit 1
+          fi
+          ip=$(aws ec2 describe-instances --instance-ids "$id" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+          echo "running=true" >> "$GITHUB_OUTPUT"
+          echo "url=http://$ip" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test the live service
+        if: steps.rollout.outputs.running == 'true'
+        run: python3 scripts/smoke_test.py --url "${{ steps.rollout.outputs.url }}" --expect-database --timeout 300
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Deploy: ${{ inputs.model }}"
+            echo "- Model: \`${{ steps.model.outputs.MODEL_ID }}\` @ \`${{ steps.model.outputs.MODEL_REVISION }}\`"
+            echo "- Image: \`${{ steps.release.outputs.image }}\`"
+            if [ "${{ steps.rollout.outputs.running }}" = "true" ]; then
+              echo "- Live at ${{ steps.rollout.outputs.url }} (smoke-tested)"
+            else
+              echo "- Instance stopped: runs this release on next start (\`scripts/aws.sh start\`)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

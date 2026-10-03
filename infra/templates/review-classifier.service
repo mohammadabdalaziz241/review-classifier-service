@@ -1,0 +1,17 @@
+[Unit]
+Description=Review classifier stack (Docker Compose)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=HOME=/root
+WorkingDirectory=/opt/review-classifier
+ExecStart=/opt/review-classifier/start.sh
+ExecStop=/bin/sh -c 'if [ -f .env ]; then /usr/bin/docker compose down; fi'
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars (git-ignored) and fill in.
+alert_email = "you@example.com"
+
+# Defaults, shown for reference:
+# region             = "eu-north-1"
+# github_repository  = "mohammadabdalaziz241/review-classifier-service"
+# instance_type      = "c7i-flex.large"
+# idle_stop_minutes  = 120
+# monthly_budget_usd = 10
+# allowed_cidrs      = ["0.0.0.0/0"]   # e.g. ["203.0.113.7/32"] for your IP only
