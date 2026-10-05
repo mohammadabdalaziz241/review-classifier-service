@@ -1,6 +1,14 @@
 # Copy to terraform.tfvars (git-ignored) and fill in.
 alert_email = "you@example.com"
 
+# GitHub repositories created after 15 July 2026 identify themselves to AWS by
+# numeric IDs as well as names. Get both with (see infra/README.md, step 3):
+#   curl -s https://api.github.com/repos/OWNER/REPO
+# ("id" is the repository ID, "owner" > "id" the owner ID). Leave both out for
+# older repositories.
+# github_owner_id      = 123456
+# github_repository_id = 456789
+
 # Defaults, shown for reference:
 # region             = "eu-north-1"
 # github_repository  = "mohammadabdalaziz241/review-classifier-service"

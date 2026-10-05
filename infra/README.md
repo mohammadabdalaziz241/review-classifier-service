@@ -80,7 +80,17 @@ cp terraform.tfvars.example terraform.tfvars
 open -e terraform.tfvars
 ```
 
-Set `alert_email` to your address, save, then:
+Set `alert_email` to your address and save. GitHub repositories created after 15 July
+2026 (this one included) sign in to AWS with their numeric owner and repository IDs, so
+add those too:
+
+```bash
+curl -s https://api.github.com/repos/mohammadabdalaziz241/review-classifier-service \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); print("github_owner_id =", d["owner"]["id"]); print("github_repository_id =", d["id"])' \
+  | tee -a terraform.tfvars
+```
+
+Then:
 
 ```bash
 terraform init
@@ -227,7 +237,7 @@ above, including the budget. Do it before the credits or the Free plan period en
 
 | Symptom | Likely cause |
 | --- | --- |
-| Deploy: `Not authorized to perform sts:AssumeRoleWithWebIdentity` | `AWS_ROLE_ARN` is wrong, or the workflow ran on a branch other than `main` |
+| Deploy: `Not authorized to perform sts:AssumeRoleWithWebIdentity` | `AWS_ROLE_ARN` is wrong; the workflow ran on a branch other than `main`; or `github_owner_id` / `github_repository_id` are missing or wrong (`terraform output github_oidc_subject` shows what the role accepts) |
 | Deploy: `Missing repository settings` | A variable or secret from step 4 is not set |
 | `scripts/aws.sh start` waits and times out | `scripts/aws.sh logs`; on the instance (`scripts/aws.sh shell`): `sudo journalctl -u review-classifier` and `sudo cat /var/log/cloud-init-output.log` |
 | `aws: error: ... login` or expired credentials | Run `aws login --profile admin` again |

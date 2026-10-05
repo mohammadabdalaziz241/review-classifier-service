@@ -21,6 +21,18 @@ locals {
   github_oidc_arn = (var.create_github_oidc_provider
     ? aws_iam_openid_connect_provider.github[0].arn
   : data.aws_iam_openid_connect_provider.github[0].arn)
+
+  # The token's subject names the repository and branch. Repositories created after
+  # 15 July 2026 use the immutable form, with the owner and repository IDs, so a
+  # repository later re-created under the same name cannot deploy:
+  #   repo:OWNER@OWNER_ID/REPO@REPO_ID:ref:refs/heads/BRANCH
+  # Older repositories use repo:OWNER/REPO:ref:refs/heads/BRANCH.
+  github_owner = split("/", var.github_repository)[0]
+  github_repo  = split("/", var.github_repository)[1]
+  github_subject = (var.github_repository_id == null
+    ? "repo:${var.github_repository}:ref:refs/heads/${var.github_branch}"
+    : "repo:${local.github_owner}@${var.github_owner_id}/${local.github_repo}@${var.github_repository_id}:ref:refs/heads/${var.github_branch}"
+  )
 }
 
 data "aws_iam_policy_document" "github_assume" {
@@ -39,7 +51,7 @@ data "aws_iam_policy_document" "github_assume" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:ref:refs/heads/${var.github_branch}"]
+      values   = [local.github_subject]
     }
   }
 }

@@ -16,6 +16,27 @@ variable "github_repository" {
   default     = "mohammadabdalaziz241/review-classifier-service"
 }
 
+variable "github_owner_id" {
+  description = <<-EOT
+    Numeric ID of the repository owner on GitHub. Repositories created after
+    15 July 2026 sign their OIDC tokens with IDs as well as names; set this and
+    github_repository_id for them. Leave both unset for older repositories.
+  EOT
+  type        = number
+  default     = null
+}
+
+variable "github_repository_id" {
+  description = "Numeric ID of the GitHub repository (see github_owner_id)."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = (var.github_repository_id == null) == (var.github_owner_id == null)
+    error_message = "Set both github_owner_id and github_repository_id, or neither."
+  }
+}
+
 variable "github_branch" {
   description = "Only workflows running on this branch may deploy."
   type        = string

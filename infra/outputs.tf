@@ -11,6 +11,11 @@ output "github_deploy_role_arn" {
   value       = aws_iam_role.github_deploy.arn
 }
 
+output "github_oidc_subject" {
+  description = "The only GitHub token subject the deploy role accepts."
+  value       = local.github_subject
+}
+
 output "region" {
   value = var.region
 }
