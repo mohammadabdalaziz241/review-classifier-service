@@ -38,7 +38,9 @@ brew install hashicorp/tap/terraform
 brew install --cask session-manager-plugin
 ```
 
-`aws --version` should report 2.32 or newer.
+`aws --version` should report 2.32 or newer, and `terraform version` should end with
+`darwin_arm64` on an Apple-chip Mac (see [Troubleshooting](#troubleshooting) if it says
+`darwin_amd64`).
 
 ### 2. Sign the command line in with your console user
 
@@ -242,4 +244,5 @@ above, including the budget. Do it before the credits or the Free plan period en
 | `scripts/aws.sh start` waits and times out | `scripts/aws.sh logs`; on the instance (`scripts/aws.sh shell`): `sudo journalctl -u review-classifier` and `sudo cat /var/log/cloud-init-output.log` |
 | `aws: error: ... login` or expired credentials | Run `aws login --profile admin` again |
 | `terraform apply` fails on the OIDC provider: already exists | Set `create_github_oidc_provider = false` in `terraform.tfvars` |
+| `terraform plan`: `timeout while waiting for plugin to start`, or `assertion failed [arm_interval()...]` | An Intel Terraform running under Rosetta on an Apple-chip Mac (Intel Homebrew in `/usr/local`). Install the `darwin_arm64` build from [releases.hashicorp.com](https://releases.hashicorp.com/terraform/), delete `.terraform`, and run `terraform init` again |
 | An error mentioning the Free plan | That service or size is not available on the Free plan; tell me which resource failed |

@@ -14,10 +14,10 @@ concurrency:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: pip install "ruff>=0.5"
@@ -26,10 +26,10 @@ jobs:
 
   infra:
     # The AWS deployment code: Terraform formatting and validity, and the shell scripts.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v4
       - run: terraform fmt -check -recursive infra
       - run: terraform -chdir=infra init -backend=false -input=false
       - run: terraform -chdir=infra validate
@@ -38,14 +38,14 @@ jobs:
 
   test:
     # Fast suite against the dummy backend; database tests run on SQLite.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -55,7 +55,7 @@ jobs:
 
   postgres-tests:
     # The same database tests against a real PostgreSQL.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16-alpine
@@ -70,8 +70,8 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql://test:test@localhost:5432/test
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -81,10 +81,10 @@ jobs:
 
   model-tests:
     # Loads a tiny locally built transformers model through the real code path.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -98,10 +98,10 @@ jobs:
   docker:
     # Builds the real image with a model baked in, starts the whole stack
     # (PostgreSQL, migrations, API) and runs the end-to-end smoke test against it.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip

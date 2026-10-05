@@ -13,11 +13,10 @@ model versioning, a Docker image that serves a pinned model offline, PostgreSQL 
 every prediction and of user feedback, an on-demand AWS deployment defined in Terraform, and
 tests for all of it. A later milestone adds monitoring and measured performance.
 
-> **Status:** milestones 1–3 done: the project's own retrained RoBERTa models, served metrics
-> verified against training ([results](#results)), packaged as a Docker image and run with
-> PostgreSQL through Docker Compose. Milestone 4, the AWS deployment, is written and tested
-> against an AWS emulator; the first deployment to a real account is next. See the
-> [roadmap](#roadmap).
+> **Status:** milestones 1–4 done: the project's own retrained RoBERTa models, served metrics
+> verified against training ([results](#results)), packaged as a Docker image with
+> PostgreSQL, and deployed on demand to AWS by a GitHub Actions workflow that smoke-tests the
+> live service. Next: monitoring and a measured benchmark. See the [roadmap](#roadmap).
 
 ## Results
 
@@ -156,6 +155,13 @@ is defined in Terraform ([`infra/`](infra/)) and released by a GitHub Actions wo
   Budget emails at $10 of monthly usage. Running costs about $0.10 an hour; stopped, about
   $2 a month for the disk and images.
 - **Locked down:** no SSH port, IMDSv2 only, least-privilege roles, logs in CloudWatch.
+
+The first real release (October 2026, eu-north-1): the sentiment model at its pinned
+commit, built, pushed, rolled out and smoke-tested against the live instance in under six
+minutes. The instance is stopped between demos, so the address in the summary changes on
+every start.
+
+![Deploy workflow run: built, released and smoke-tested on AWS](docs/images/deploy-run.png)
 
 Setup, everyday commands, a cost breakdown and teardown are in
 [`infra/README.md`](infra/README.md).
@@ -538,9 +544,9 @@ tests/               unit and integration tests
       build time; Docker Compose stack; CI builds it and smoke-tests the running stack
 - [x] **3. Persistence** — PostgreSQL records of every prediction, labelled feedback with
       hash-checked text, Alembic migrations, graceful degradation when the database is down
-- [ ] **4. Cloud** — on-demand AWS deployment: Terraform, ECR, EC2 with Session Manager,
-      OIDC release workflow, CloudWatch logs, idle auto-stop, budget alert.
-      *Written and tested against an AWS emulator; first real deployment pending.*
+- [x] **4. Cloud** — on-demand AWS deployment: Terraform, ECR, EC2 with Session Manager,
+      OIDC release workflow, CloudWatch logs, idle auto-stop, budget alert; released and
+      smoke-tested on a real account
 - [ ] **5. Operations** — metrics and monitoring, and a reproducible benchmark of
       latency, throughput, memory and error rate, with the conditions stated
 - [ ] Later: the per-variety Gemma-2-2B LoRA sarcasm adapters with adapter switching,
