@@ -34,7 +34,9 @@ instance_id() {
     --filters "Name=tag:Project,Values=$PROJECT" \
     "Name=instance-state-name,Values=pending,running,stopping,stopped" \
     --query 'Reservations[].Instances[].InstanceId' --output text)
-  [ -n "$id" ] && [ "$id" != "None" ] || die "no $PROJECT instance found in $REGION (run terraform apply in infra/)"
+  if [ -z "$id" ] || [ "$id" = "None" ]; then
+    die "no $PROJECT instance found in $REGION (run terraform apply in infra/)"
+  fi
   echo "$id"
 }
 

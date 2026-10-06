@@ -12,7 +12,6 @@ from fastapi.testclient import TestClient
 
 from review_classifier.api import create_app
 from review_classifier.config import Settings
-from review_classifier.db import create_db_engine, upgrade
 
 ROOT = Path(__file__).resolve().parents[1]
 MONITORING = ROOT / "monitoring"
@@ -40,6 +39,10 @@ def _builder():
 @pytest.fixture(scope="module")
 def exported(tmp_path_factory) -> set[str]:
     """Sample names in a scrape of a service with a database, after some traffic."""
+    pytest.importorskip("sqlalchemy")
+    pytest.importorskip("alembic")
+    from review_classifier.db import create_db_engine, upgrade
+
     url = f"sqlite:///{tmp_path_factory.mktemp('db') / 'm.db'}"
     engine = create_db_engine(url)
     upgrade(engine)
