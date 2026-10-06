@@ -14,11 +14,11 @@ every prediction and of user feedback, an on-demand AWS deployment defined in Te
 Prometheus metrics with a Grafana dashboard and alert rules, a reproducible load benchmark,
 and tests for all of it.
 
-> **Status:** milestones 1–4 done: the project's own retrained RoBERTa models, served metrics
+> **Status:** milestones 1–5 done: the project's own retrained RoBERTa models, served metrics
 > verified against training ([results](#results)), packaged as a Docker image with
-> PostgreSQL, and deployed on demand to AWS by a GitHub Actions workflow that smoke-tests the
-> live service. Milestone 5 (monitoring and a benchmark) is built and tested; its first run
-> on AWS is next. See the [roadmap](#roadmap).
+> PostgreSQL, deployed on demand to AWS by a GitHub Actions workflow that smoke-tests the
+> live service, monitored with Prometheus and Grafana, and
+> [benchmarked on AWS](#results-on-aws). Next: throughput. See the [roadmap](#roadmap).
 
 ## Results
 
@@ -226,6 +226,43 @@ scripts/aws.sh benchmark      # on the AWS instance; saves results/benchmarks/aw
   model version, limits, PyTorch threads, machine and text lengths. It uses only the
   standard library, so on AWS it runs in a container from the deployed image, next to the
   API, keeping the internet out of the measurement.
+
+### Results on AWS
+
+The sentiment model (`Mohammadeeu20/besstie-roberta-sentiment` at `43da496`) on the
+deployment's c7i-flex.large (2 vCPU, 4 GiB, eu-north-1), CPU only, one forward pass at a
+time, 30 s per scenario after a 5 s warm-up, 6 October 2026. Full report:
+[`results/benchmarks/aws-c7i-flex.large-20261006-1147.json`](results/benchmarks/aws-c7i-flex.large-20261006-1147.json).
+
+| Scenario | Clients | Texts / request | Requests / s | Texts / s | p50 ms | p95 ms | p99 ms | Model p50 ms | Errors |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Short review, 1 client | 1 | 1 | 9.1 | 9.1 | 111 | 143 | 164 | 106 | 0% |
+| Short review, 4 clients | 4 | 1 | 9.5 | 9.5 | 387 | 560 | 662 | 97 | 0% |
+| Short review, 16 clients | 16 | 1 | 10.1 | 10.1 | 1,467 | 1,937 | 2,129 | 94 | 0% |
+| Long review, 1 client | 1 | 1 | 2.7 | 2.7 | 372 | 445 | 485 | 367 | 0% |
+| Long review, 4 clients | 4 | 1 | 2.7 | 2.7 | 1,428 | 1,714 | 1,746 | 357 | 0% |
+| Batch of 16 short reviews | 1 | 16 | 1.3 | 21.3 | 753 | 879 | 910 | 747 | 0% |
+
+- **A single prediction takes about 110 ms** for a short review and 370 ms for a long one;
+  the model accounts for nearly all of it (the HTTP layer, validation and the database write
+  add about 5 ms).
+- **Throughput is set by the model, not by the clients.** With more clients, requests per
+  second stay at about 10 (short) and 2.7 (long) while latency grows in proportion, as
+  requests wait their turn: p50 at 16 clients is 13 times the single-client p50. That wait
+  is visible on the dashboard as "waiting for a slot".
+- **Batching more than doubles throughput:** 16 short reviews per request classified 21.3
+  texts per second, 2.3 times as many as single requests.
+- **Resources:** the API used at most 878 MB of memory, and in every scenario it averaged
+  one CPU core of the two, so the second vCPU sat idle. Using it (more PyTorch threads, or
+  two passes at once) and batching concurrent requests on the server are the next things
+  to measure.
+- **No errors** in about 1,060 requests (1,650 texts) across the six scenarios.
+
+![Grafana dashboard during the benchmark](docs/images/dashboard.png)
+
+*The dashboard while the benchmark ran: traffic, server latency (p95 1.95 s at 16 clients),
+model time against queue wait, the label mix and confidence, input lengths, and memory and
+CPU.*
 
 ## Train the project's model
 
@@ -628,11 +665,11 @@ tests/               unit and integration tests
 - [x] **4. Cloud** — on-demand AWS deployment: Terraform, ECR, EC2 with Session Manager,
       OIDC release workflow, CloudWatch logs, idle auto-stop, budget alert; released and
       smoke-tested on a real account
-- [ ] **5. Operations** — Prometheus metrics, Grafana dashboard and alert rules as code,
+- [x] **5. Operations** — Prometheus metrics, Grafana dashboard and alert rules as code,
       monitoring on the instance behind a tunnel, deployment files shipped in each release,
-      and a reproducible benchmark of latency, throughput, memory and error rate.
-      *Built and tested; first run on AWS next.*
-- [ ] **6. Throughput** — server-side micro-batching of concurrent requests, measured
-      against the milestone 5 baseline (batches already classify 2.3× more texts per second)
+      and a reproducible benchmark of latency, throughput, memory and error rate, run on AWS
+- [ ] **6. Throughput** — use both vCPUs and batch concurrent requests on the server,
+      measured against the [AWS baseline](#results-on-aws) (about 10 short reviews per second
+      one at a time; 21 per second in batches of 16)
 - [ ] Later: the per-variety Gemma-2-2B LoRA sarcasm adapters with adapter switching,
       carried over from the Gradio app (needs a CUDA GPU)
