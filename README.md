@@ -1,25 +1,38 @@
 # Review Classifier Service
 
-A FastAPI inference service for sentiment and sarcasm classification of English reviews,
-built on the models from my NLP group project,
-[cross-variety-sentiment-sarcasm](https://github.com/mohammadabdalaziz241/cross-variety-sentiment-sarcasm)
-(classical baselines, RoBERTa fine-tuning and Gemma-2-2B LoRA adapters, evaluated on the
-BESSTIE-CW-26 dataset across British, Australian and Indian English).
+[![CI](https://github.com/mohammadabdalaziz241/review-classifier-service/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mohammadabdalaziz241/review-classifier-service/actions/workflows/ci.yml)
+[![Deploy](https://github.com/mohammadabdalaziz241/review-classifier-service/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/mohammadabdalaziz241/review-classifier-service/actions/workflows/deploy.yml)
 
-The research already exists. This repository turns the strongest efficient model, pooled
-RoBERTa-base, into a service: a reproducible training script that keeps the model, a serving
-path proven to reproduce the training metrics, input validation, consistent errors, exact
-model versioning, a Docker image that serves a pinned model offline, PostgreSQL records of
-every prediction and of user feedback, an on-demand AWS deployment defined in Terraform,
-Prometheus metrics with a Grafana dashboard and alert rules, a reproducible load benchmark,
-and tests for all of it.
+**A RoBERTa inference service for English-review sentiment and sarcasm classification, with reproducible model serving, on-demand AWS deployment, monitoring, and measured performance improvements.**
 
-> **Status:** milestones 1–6 done: the project's own retrained RoBERTa models, served metrics
-> verified against training ([results](#results)), packaged as a Docker image with
-> PostgreSQL, deployed on demand to AWS by a GitHub Actions workflow that smoke-tests the
-> live service, monitored with Prometheus and Grafana, [benchmarked on AWS](#results-on-aws),
-> and given [79% more throughput under load](#throughput-dynamic-batching) by batching
-> requests on the server. See the [roadmap](#roadmap).
+Built from the experiments in [Cross-Variety Sentiment and Sarcasm Classification](https://github.com/mohammadabdalaziz241/cross-variety-sentiment-sarcasm). This repository covers the engineering work that takes the research into a running service:
+
+- **Serve and validate:** FastAPI, pinned model versions, request validation, PostgreSQL prediction records, and labelled feedback.
+- **Package and deploy:** a Docker image with the model loaded offline, Terraform-managed AWS infrastructure, and GitHub Actions deployment with OIDC and live smoke tests.
+- **Observe and improve:** Prometheus metrics, Grafana dashboards, reproducible CPU load benchmarks, and dynamic request batching.
+
+## Measured outcomes
+
+| Outcome | Result | Evidence |
+| --- | --- | --- |
+| Sentiment inference through the HTTP API | **0.8987 macro-F1** on 2,183 test texts; within 0.0005 of the training result | [Evaluation report](results/roberta-sentiment-seed42/eval-hub.json) |
+| Sarcasm inference through the HTTP API | **0.6984 macro-F1**; training and served predictions match | [Evaluation report](results/roberta-sarcasm-seed42/eval-hub.json) |
+| Dynamic batching under load | **79% higher throughput**, 11.3 → 20.3 requests/s; **43% lower p95 latency**, 1.62 → 0.92 s | [Baseline](results/benchmarks/aws-c7i-flex.large-20261006-1339-baseline.json) · [Batched](results/benchmarks/aws-c7i-flex.large-20261006-1347-batch_requests-true.json) |
+
+The batching comparison uses short reviews, 16 concurrent clients, the same sentiment model and release, and a CPU-only AWS c7i-flex.large instance. Each scenario runs for 30 seconds after a 5-second warm-up; the benchmark client runs on the same instance. These are project benchmark results, not a general service-level guarantee.
+
+## Explore the project
+
+[Run the API](#quickstart) · [Docker stack](#run-with-docker) · [AWS deployment](#deploy-to-aws) · [API contract](#api) · [Monitoring](#monitoring) · [Benchmarks](#benchmark) · [Tests](#tests)
+
+| Inspect | Start here |
+| --- | --- |
+| API validation and error handling | [api.py](src/review_classifier/api.py) · [schemas.py](src/review_classifier/schemas.py) |
+| Request batching and performance | [batching.py](src/review_classifier/batching.py) · [benchmark.py](src/review_classifier/benchmark.py) |
+| Prediction records and feedback | [store.py](src/review_classifier/store.py) · [migrations](src/review_classifier/migrations/) |
+| Continuous integration and deployment | [CI workflow](.github/workflows/ci.yml) · [Deploy workflow](.github/workflows/deploy.yml) · [Terraform](infra/) |
+
+**Deployment status:** AWS runs on demand for demonstrations and is stopped between sessions. The quickstart's public default model lets visitors try the service; reproducing this project's exact models requires access to their private Hugging Face repositories.
 
 ## Results
 
