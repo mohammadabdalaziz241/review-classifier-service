@@ -1,0 +1,304 @@
+{
+  "started_at": "2026-10-06T13:47:21+00:00",
+  "label": "AWS c7i-flex.large (eu-north-1), client on the same instance, variant: BATCH_REQUESTS=true",
+  "url": "http://bench-api:8000",
+  "conditions": {
+    "model": {
+      "id": "Mohammadeeu20/besstie-roberta-sentiment",
+      "version": "43da49621dc65cdd7cd11f77c8c2e7eb13d06cbb",
+      "backend": "hf",
+      "task": "sentiment",
+      "device": "cpu",
+      "max_seq_length": 256
+    },
+    "limits": {
+      "max_text_chars": 2000,
+      "max_batch_size": 32,
+      "max_concurrent_inferences": 1
+    },
+    "runtime": {
+      "inference_threads": 1,
+      "batch_requests": true,
+      "batch_max_texts": 16,
+      "batch_wait_ms": 0
+    },
+    "server": {
+      "inference_threads": 1.0,
+      "max_concurrent_inferences": 1.0,
+      "dynamic_batching": 1.0,
+      "metrics": true
+    },
+    "client": {
+      "platform": "Linux-6.18.51-120.163.amzn2023.x86_64-x86_64-with-glibc2.41",
+      "machine": "x86_64",
+      "cpus": 2,
+      "python": "3.12.15"
+    },
+    "texts_mean_chars": {
+      "short": 133,
+      "long": 1094
+    },
+    "duration_s": 30.0,
+    "warmup_s": 5.0
+  },
+  "scenarios": [
+    {
+      "scenario": {
+        "name": "short-c1",
+        "texts": "short",
+        "concurrency": 1,
+        "batch": 1,
+        "path": "/v1/predict"
+      },
+      "duration_s": 30.0,
+      "requests": 350,
+      "errors": 0,
+      "error_rate": 0.0,
+      "error_kinds": {},
+      "requests_per_s": 11.67,
+      "texts_per_s": 11.67,
+      "latency_ms": {
+        "p50": 82.76,
+        "p90": 90.99,
+        "p95": 104.37,
+        "p99": 133.18,
+        "max": 194.67,
+        "mean": 85.49
+      },
+      "server_ms": {
+        "p50": 82.14,
+        "p90": 90.32,
+        "p95": 103.53,
+        "p99": 132.24,
+        "max": 193.76,
+        "mean": 84.82
+      },
+      "inference_ms": {
+        "p50": 79.08,
+        "p90": 86.8,
+        "p95": 95.84,
+        "p99": 125.5,
+        "max": 190.25,
+        "mean": 81.51
+      },
+      "server_cpu_cores": 0.97,
+      "server_rss_mb_max": 775.2,
+      "client_cpu_cores": 0.01
+    },
+    {
+      "scenario": {
+        "name": "short-c4",
+        "texts": "short",
+        "concurrency": 4,
+        "batch": 1,
+        "path": "/v1/predict"
+      },
+      "duration_s": 30.0,
+      "requests": 492,
+      "errors": 0,
+      "error_rate": 0.0,
+      "error_kinds": {},
+      "requests_per_s": 16.4,
+      "texts_per_s": 16.4,
+      "latency_ms": {
+        "p50": 236.0,
+        "p90": 257.87,
+        "p95": 289.33,
+        "p99": 429.42,
+        "max": 479.18,
+        "mean": 243.73
+      },
+      "server_ms": {
+        "p50": 235.06,
+        "p90": 255.05,
+        "p95": 288.37,
+        "p99": 428.46,
+        "max": 472.35,
+        "mean": 242.59
+      },
+      "inference_ms": {
+        "p50": 117.91,
+        "p90": 131.07,
+        "p95": 147.12,
+        "p99": 221.91,
+        "max": 291.04,
+        "mean": 121.84
+      },
+      "server_cpu_cores": 1.0,
+      "server_rss_mb_max": 779.9,
+      "client_cpu_cores": 0.01
+    },
+    {
+      "scenario": {
+        "name": "short-c16",
+        "texts": "short",
+        "concurrency": 16,
+        "batch": 1,
+        "path": "/v1/predict"
+      },
+      "duration_s": 30.0,
+      "requests": 608,
+      "errors": 0,
+      "error_rate": 0.0,
+      "error_kinds": {},
+      "requests_per_s": 20.27,
+      "texts_per_s": 20.27,
+      "latency_ms": {
+        "p50": 765.77,
+        "p90": 889.81,
+        "p95": 921.4,
+        "p99": 1082.35,
+        "max": 1114.7,
+        "mean": 783.21
+      },
+      "server_ms": {
+        "p50": 761.16,
+        "p90": 885.66,
+        "p95": 919.77,
+        "p99": 1075.34,
+        "max": 1106.26,
+        "mean": 779.65
+      },
+      "inference_ms": {
+        "p50": 623.4,
+        "p90": 734.92,
+        "p95": 743.72,
+        "p99": 915.8,
+        "max": 915.8,
+        "mean": 617.09
+      },
+      "server_cpu_cores": 1.01,
+      "server_rss_mb_max": 811.7,
+      "client_cpu_cores": 0.01
+    },
+    {
+      "scenario": {
+        "name": "long-c1",
+        "texts": "long",
+        "concurrency": 1,
+        "batch": 1,
+        "path": "/v1/predict"
+      },
+      "duration_s": 30.0,
+      "requests": 95,
+      "errors": 0,
+      "error_rate": 0.0,
+      "error_kinds": {},
+      "requests_per_s": 3.17,
+      "texts_per_s": 3.17,
+      "latency_ms": {
+        "p50": 309.19,
+        "p90": 337.01,
+        "p95": 381.39,
+        "p99": 394.41,
+        "max": 408.55,
+        "mean": 315.09
+      },
+      "server_ms": {
+        "p50": 308.57,
+        "p90": 336.18,
+        "p95": 380.54,
+        "p99": 393.58,
+        "max": 407.75,
+        "mean": 314.45
+      },
+      "inference_ms": {
+        "p50": 305.46,
+        "p90": 326.96,
+        "p95": 376.83,
+        "p99": 389.68,
+        "max": 404.05,
+        "mean": 310.96
+      },
+      "server_cpu_cores": 0.99,
+      "server_rss_mb_max": 800.4,
+      "client_cpu_cores": 0.0
+    },
+    {
+      "scenario": {
+        "name": "long-c4",
+        "texts": "long",
+        "concurrency": 4,
+        "batch": 1,
+        "path": "/v1/predict"
+      },
+      "duration_s": 30.0,
+      "requests": 97,
+      "errors": 0,
+      "error_rate": 0.0,
+      "error_kinds": {},
+      "requests_per_s": 3.23,
+      "texts_per_s": 3.23,
+      "latency_ms": {
+        "p50": 1212.83,
+        "p90": 1387.65,
+        "p95": 1406.97,
+        "p99": 1456.11,
+        "max": 1456.62,
+        "mean": 1237.92
+      },
+      "server_ms": {
+        "p50": 1211.59,
+        "p90": 1386.83,
+        "p95": 1405.96,
+        "p99": 1452.74,
+        "max": 1455.07,
+        "mean": 1236.72
+      },
+      "inference_ms": {
+        "p50": 880.89,
+        "p90": 980.85,
+        "p95": 1057.06,
+        "p99": 1071.98,
+        "max": 1071.98,
+        "mean": 762.51
+      },
+      "server_cpu_cores": 1.0,
+      "server_rss_mb_max": 823.0,
+      "client_cpu_cores": 0.0
+    },
+    {
+      "scenario": {
+        "name": "batch16-short-c1",
+        "texts": "short",
+        "concurrency": 1,
+        "batch": 16,
+        "path": "/v1/predict/batch"
+      },
+      "duration_s": 30.0,
+      "requests": 44,
+      "errors": 0,
+      "error_rate": 0.0,
+      "error_kinds": {},
+      "requests_per_s": 1.47,
+      "texts_per_s": 23.47,
+      "latency_ms": {
+        "p50": 675.57,
+        "p90": 782.17,
+        "p95": 802.55,
+        "p99": 836.83,
+        "max": 860.91,
+        "mean": 682.04
+      },
+      "server_ms": {
+        "p50": 674.95,
+        "p90": 781.43,
+        "p95": 801.73,
+        "p99": 836.08,
+        "max": 860.19,
+        "mean": 681.38
+      },
+      "inference_ms": {
+        "p50": 670.56,
+        "p90": 776.31,
+        "p95": 795.88,
+        "p99": 830.64,
+        "max": 855.12,
+        "mean": 676.48
+      },
+      "server_cpu_cores": 0.99,
+      "server_rss_mb_max": 816.4,
+      "client_cpu_cores": 0.0
+    }
+  ]
+}
