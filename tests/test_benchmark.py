@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 
 import pytest
 
@@ -113,3 +114,12 @@ def test_errors_are_counted_not_hidden(tmp_path):
 
 def test_unreachable_service():
     assert benchmark.main(["--url", f"http://127.0.0.1:{free_port()}", "--duration", "1"]) == 2
+
+
+def test_wait_gives_up_after_the_timeout():
+    started = time.monotonic()
+    code = benchmark.main(
+        ["--url", f"http://127.0.0.1:{free_port()}", "--duration", "1", "--wait", "2"]
+    )
+    assert code == 2
+    assert 1.5 <= time.monotonic() - started < 10

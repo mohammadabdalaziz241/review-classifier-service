@@ -759,13 +759,68 @@
       "gridPos": {
         "x": 12,
         "y": 14,
-        "w": 12,
+        "w": 6,
         "h": 8
       },
       "id": 13
     },
     {
-      "id": 14,
+      "type": "timeseries",
+      "title": "Texts per forward pass",
+      "description": "With dynamic batching (BATCH_REQUESTS), requests that wait for the model share a pass, so this rises with load. Without it, it is the texts per request.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(model_batch_texts_sum[$__rate_interval])) / sum(rate(model_batch_texts_count[$__rate_interval]))",
+          "legendFormat": "average",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 14,
+        "w": 6,
+        "h": 8
+      },
+      "id": 14
+    },
+    {
+      "id": 15,
       "type": "row",
       "title": "Model behaviour",
       "collapsed": false,
@@ -830,7 +885,7 @@
         "w": 8,
         "h": 8
       },
-      "id": 15
+      "id": 16
     },
     {
       "type": "timeseries",
@@ -895,7 +950,7 @@
         "w": 8,
         "h": 8
       },
-      "id": 16
+      "id": 17
     },
     {
       "type": "timeseries",
@@ -959,7 +1014,7 @@
         "w": 8,
         "h": 8
       },
-      "id": 17
+      "id": 18
     },
     {
       "type": "stat",
@@ -1026,7 +1081,7 @@
         "w": 6,
         "h": 5
       },
-      "id": 18
+      "id": 19
     },
     {
       "type": "stat",
@@ -1086,7 +1141,7 @@
         "w": 6,
         "h": 5
       },
-      "id": 19
+      "id": 20
     },
     {
       "type": "timeseries",
@@ -1141,10 +1196,10 @@
         "w": 12,
         "h": 5
       },
-      "id": 20
+      "id": 21
     },
     {
-      "id": 21,
+      "id": 22,
       "type": "row",
       "title": "Resources",
       "collapsed": false,
@@ -1209,7 +1264,7 @@
         "w": 6,
         "h": 8
       },
-      "id": 22
+      "id": 23
     },
     {
       "type": "timeseries",
@@ -1282,7 +1337,7 @@
         "w": 6,
         "h": 8
       },
-      "id": 23
+      "id": 24
     },
     {
       "type": "timeseries",
@@ -1347,7 +1402,7 @@
         "w": 6,
         "h": 8
       },
-      "id": 24
+      "id": 25
     },
     {
       "type": "table",
@@ -1400,7 +1455,7 @@
         "w": 6,
         "h": 8
       },
-      "id": 25
+      "id": 26
     }
   ]
 }

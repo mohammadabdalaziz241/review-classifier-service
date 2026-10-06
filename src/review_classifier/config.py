@@ -42,6 +42,19 @@ def _concurrency(env: Mapping[str, str], default: int | None) -> int | None:
     return _int(env, "MAX_CONCURRENT_INFERENCES", default)
 
 
+def _bool_or(env: Mapping[str, str], name: str, default: bool) -> bool:
+    value = _bool(env, name)
+    return default if value is None else value
+
+
+def _non_negative(env: Mapping[str, str], name: str, default: int) -> int:
+    raw = env.get(name, "").strip()
+    if raw == "0":
+        return 0
+    value = _int(env, name, default)
+    return default if value is None else value
+
+
 def _port(env: Mapping[str, str], name: str) -> int | None:
     value = _int(env, name, None)
     if value is not None and value > 65535:
@@ -91,6 +104,15 @@ class Settings:
     # Forward passes allowed at once; further requests wait. On a CPU, concurrent
     # passes compete for the same cores, so 1 keeps latency predictable. None: unlimited.
     max_concurrent_inferences: int | None = 1
+    # PyTorch threads per forward pass. None: PyTorch's default, one per physical core
+    # (on a 2-vCPU cloud instance with hyperthreading, that is 1).
+    inference_threads: int | None = None
+    # Dynamic batching: requests that arrive while the model is busy share its next
+    # forward pass, up to batch_max_texts texts (see batching.py).
+    batch_requests: bool = False
+    batch_max_texts: int = 16
+    # Milliseconds a pass may wait to collect more texts; 0 never waits.
+    batch_wait_ms: int = 0
 
     # Serve Prometheus metrics on this port instead of at /metrics on the API port,
     # so they can stay off the public interface. None: /metrics on the API.
@@ -104,6 +126,13 @@ class Settings:
     normalize_whitespace: bool | None = None
     replace_urls: bool | None = None
     replace_mentions: bool | None = None
+
+    def __post_init__(self) -> None:
+        if self.batch_requests and self.max_concurrent_inferences is None:
+            raise ValueError(
+                "BATCH_REQUESTS needs a limit on concurrent passes: set "
+                "MAX_CONCURRENT_INFERENCES to 1 or more (the batcher runs that many passes)."
+            )
 
     def preprocessing_overrides(self) -> dict[str, bool | None]:
         return {key: getattr(self, key) for key in PREPROCESSING_KEYS}
@@ -122,6 +151,10 @@ class Settings:
             max_batch_size=_int(env, "MAX_BATCH_SIZE", defaults.max_batch_size),
             inference_batch_size=_int(env, "INFERENCE_BATCH_SIZE", defaults.inference_batch_size),
             max_concurrent_inferences=_concurrency(env, defaults.max_concurrent_inferences),
+            inference_threads=_int(env, "INFERENCE_THREADS", defaults.inference_threads),
+            batch_requests=_bool_or(env, "BATCH_REQUESTS", defaults.batch_requests),
+            batch_max_texts=_int(env, "BATCH_MAX_TEXTS", defaults.batch_max_texts),
+            batch_wait_ms=_non_negative(env, "BATCH_WAIT_MS", defaults.batch_wait_ms),
             metrics_port=_port(env, "METRICS_PORT"),
             task=env.get("MODEL_TASK", "").strip() or None,
             max_seq_length=_int(env, "MAX_SEQ_LENGTH", None),

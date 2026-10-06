@@ -15,12 +15,14 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
+import anyio
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import __version__
+from .batching import DynamicBatcher
 from .config import Settings
 from .predictors import Prediction, Predictor, create_predictor
 from .preprocessing import preprocess
@@ -37,10 +39,11 @@ from .schemas import (
     PredictRequest,
     PredictResponse,
     Preprocessing,
+    Runtime,
     StatusResponse,
 )
 from .serving_config import resolve_preprocessing
-from .telemetry import CONTENT_TYPE_LATEST, UNMATCHED_ROUTE, Telemetry
+from .telemetry import CONTENT_TYPE_LATEST, UNMATCHED_ROUTE, Telemetry, inference_threads
 
 if TYPE_CHECKING:  # the database layer is optional: pip install '.[db]'
     from .store import PredictionStore
@@ -176,13 +179,29 @@ def create_app(
         if settings.metrics_port is not None:
             telemetry.serve(settings.metrics_port)
             logger.info("metrics on port %d at /metrics", settings.metrics_port)
+        if settings.batch_requests:
+            app.state.batcher = DynamicBatcher(
+                app.state.predictor.predict,
+                max_texts=settings.batch_max_texts,
+                max_wait=settings.batch_wait_ms / 1000,
+                workers=settings.max_concurrent_inferences or 1,
+                on_pass=lambda texts, _seconds: telemetry.observe_pass(texts),
+            )
+            await app.state.batcher.start()
         logger.info(
-            "inference concurrency limit=%s",
+            "inference: concurrency limit=%s threads=%s batching=%s",
             settings.max_concurrent_inferences or "unlimited",
+            inference_threads(app.state.predictor) or "default",
+            f"up to {settings.batch_max_texts} texts, wait {settings.batch_wait_ms} ms"
+            if settings.batch_requests
+            else "off",
         )
         try:
             yield
         finally:
+            if app.state.batcher is not None:
+                await app.state.batcher.stop()
+                app.state.batcher = None
             telemetry.stop()
             if app.state.store is not None:
                 app.state.store.close()
@@ -199,10 +218,12 @@ def create_app(
     app.state.settings = settings
     app.state.predictor = None
     app.state.store = None
+    app.state.batcher = None
     telemetry = Telemetry(
         predictor=lambda: app.state.predictor,
         store=lambda: app.state.store,
         max_concurrent_inferences=settings.max_concurrent_inferences,
+        batching=settings.batch_requests,
     )
     app.state.telemetry = telemetry
     # Forward passes allowed at once. Requests beyond the limit wait their turn
@@ -371,14 +392,26 @@ def create_app(
                 inference_slots.release()
         if len(predictions) != len(texts):
             raise RuntimeError(f"Predictor returned {len(predictions)} results for {len(texts)}")
+        telemetry.observe_pass(len(texts))
         telemetry.observe_inference(endpoint, texts, predictions, elapsed)
         return predictions, round(elapsed * 1000, 3)
 
+    async def infer(
+        request: Request, model: Predictor, texts: list[str], endpoint: str
+    ) -> tuple[list[Prediction], float]:
+        """Run the model in a worker thread, through the batcher when batching is on."""
+        batcher = request.app.state.batcher
+        if batcher is None:
+            return await anyio.to_thread.run_sync(run, model, texts, endpoint)
+        result = await batcher.submit(texts)
+        telemetry.inference_queue.observe(result.queued)
+        telemetry.observe_inference(endpoint, texts, result.predictions, result.seconds)
+        return result.predictions, round(result.seconds * 1000, 3)
+
     # ---- routes -------------------------------------------------------------
-    # Inference routes are sync functions: FastAPI runs them in a worker thread,
-    # so a slow forward pass does not block the event loop. Health checks and
-    # metrics are async and never block, so they answer even when every worker
-    # thread is busy or waiting for an inference slot.
+    # Nothing blocks the event loop: the model runs in worker threads (or the
+    # batcher's), and the database write in the thread pool. Health checks and
+    # metrics answer even when every worker thread is busy.
 
     @app.get(
         "/health", response_model=StatusResponse, response_model_exclude_none=True, tags=["ops"]
@@ -428,14 +461,22 @@ def create_app(
                 max_batch_size=settings.max_batch_size,
                 max_concurrent_inferences=settings.max_concurrent_inferences,
             ),
+            runtime=Runtime(
+                inference_threads=inference_threads(request.app.state.predictor),
+                batch_requests=settings.batch_requests,
+                batch_max_texts=settings.batch_max_texts if settings.batch_requests else None,
+                batch_wait_ms=settings.batch_wait_ms if settings.batch_requests else None,
+            ),
         )
 
     @app.post("/v1/predict", response_model=PredictResponse, tags=["inference"])
-    def predict(body: PredictRequest, request: Request) -> PredictResponse:
+    async def predict(body: PredictRequest, request: Request) -> PredictResponse:
         model = get_predictor(request)
-        texts = prepare(request, [body.text], "text", indexed=False)
-        predictions, elapsed_ms = run(model, texts, "predict")
-        ids, recorded = record(request, model, "predict", [body.text], predictions, elapsed_ms)
+        texts = await anyio.to_thread.run_sync(prepare, request, [body.text], "text", False)
+        predictions, elapsed_ms = await infer(request, model, texts, "predict")
+        ids, recorded = await anyio.to_thread.run_sync(
+            record, request, model, "predict", [body.text], predictions, elapsed_ms
+        )
         return PredictResponse(
             request_id=request.state.request_id,
             model=model_ref(model),
@@ -445,7 +486,7 @@ def create_app(
         )
 
     @app.post("/v1/predict/batch", response_model=BatchPredictResponse, tags=["inference"])
-    def predict_batch(body: BatchPredictRequest, request: Request) -> BatchPredictResponse:
+    async def predict_batch(body: BatchPredictRequest, request: Request) -> BatchPredictResponse:
         model = get_predictor(request)
         if len(body.texts) > settings.max_batch_size:
             raise APIError(
@@ -460,9 +501,12 @@ def create_app(
                     }
                 ],
             )
-        texts = prepare(request, body.texts, "texts", indexed=True)
-        predictions, elapsed_ms = run(model, texts, "predict_batch")
-        ids, recorded = record(request, model, "predict_batch", body.texts, predictions, elapsed_ms)
+        # Preprocessing up to 32 long texts takes milliseconds: off the event loop.
+        texts = await anyio.to_thread.run_sync(prepare, request, body.texts, "texts", True)
+        predictions, elapsed_ms = await infer(request, model, texts, "predict_batch")
+        ids, recorded = await anyio.to_thread.run_sync(
+            record, request, model, "predict_batch", body.texts, predictions, elapsed_ms
+        )
         return BatchPredictResponse(
             request_id=request.state.request_id,
             model=model_ref(model),

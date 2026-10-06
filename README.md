@@ -214,7 +214,12 @@ service and records the conditions with the results, so a run can be repeated an
 ```bash
 python -m review_classifier.benchmark --url http://127.0.0.1:8000 --out bench.json
 scripts/aws.sh benchmark      # on the AWS instance; saves results/benchmarks/aws-*.json
+scripts/aws.sh benchmark --variant "BATCH_REQUESTS=true INFERENCE_THREADS=2"
 ```
+
+`--variant` benchmarks a temporary copy of the deployed API with other settings (same
+image, same database, same instance), so configurations can be compared in one session
+without redeploying.
 
 - **Closed loop:** N clients each send a request, wait for the answer and send the next, for
   30 s after a 5 s warm-up. The standard set covers short (~25 words) and long (~200 words,
@@ -523,6 +528,10 @@ All settings are environment variables, validated at startup.
 | `INFERENCE_BATCH_SIZE` | `16`                                                | Texts per forward pass |
 | `MAX_CONCURRENT_INFERENCES` | `1`                                            | Forward passes at once; others wait. `0` for no limit ([why 1](#design-decisions)) |
 | `METRICS_PORT`         | unset (`/metrics` on the API port)                  | Serve metrics on this port only, e.g. `9000`, to keep them off the public interface |
+| `INFERENCE_THREADS`    | PyTorch's default (one per physical core)           | Threads per forward pass |
+| `BATCH_REQUESTS`       | `false`                                             | Dynamic batching: requests waiting for the model share its next forward pass ([how](#design-decisions)) |
+| `BATCH_MAX_TEXTS`      | `16`                                                | Most texts in one shared pass |
+| `BATCH_WAIT_MS`        | `0`                                                 | Milliseconds a pass may wait to collect more texts; `0` never adds latency |
 | `HOST` / `PORT`        | `127.0.0.1` / `8000`                                |  |
 | `LOG_LEVEL`            | `info`                                              |  |
 
@@ -575,6 +584,13 @@ tokenizer unchanged, which is what the project's RoBERTa models were trained on.
   time; at runtime the container needs no network, token or writable model storage. The
   production Compose file and the monitoring configuration ship inside the image too, so a
   release changes code, model and configuration together and a rollback restores all three.
+- **Batch on the server, only under load.** Clients send one text at a time, but a forward
+  pass over many texts costs far less per text. With `BATCH_REQUESTS`, a request on an idle
+  server runs at once, alone; requests that arrive while the model is busy queue, and the
+  next pass takes all of them (up to `BATCH_MAX_TEXTS`). Batches therefore form only when
+  there is a queue, so light traffic pays no extra latency and heavy traffic gets the
+  throughput of batches. Each caller still gets its own predictions, and tests check that
+  batched scores equal unbatched ones. ([`batching.py`](src/review_classifier/batching.py))
 - **One forward pass at a time by default.** On a CPU, concurrent passes compete for the
   same cores. Measured with the benchmark on a 2-vCPU x86 machine and a BERT-base-sized
   model during development: with 16 concurrent clients sending short reviews, a limit of one
@@ -629,6 +645,7 @@ src/review_classifier/
   schemas.py         request and response models (the API contract)
   metrics.py         macro-F1 and friends, shared by training and evaluation
   telemetry.py       Prometheus metrics of the running service
+  batching.py        dynamic batching of requests that wait for the model
   benchmark.py       `python -m review_classifier.benchmark`: load test and report
   store.py           prediction and feedback storage, outage back-off
   db.py              `python -m review_classifier.db`: database migrations
@@ -670,6 +687,7 @@ tests/               unit and integration tests
       and a reproducible benchmark of latency, throughput, memory and error rate, run on AWS
 - [ ] **6. Throughput** — use both vCPUs and batch concurrent requests on the server,
       measured against the [AWS baseline](#results-on-aws) (about 10 short reviews per second
-      one at a time; 21 per second in batches of 16)
+      one at a time; 21 per second in batches of 16). *`INFERENCE_THREADS`, dynamic
+      batching and benchmark variants built and tested; AWS comparison next.*
 - [ ] Later: the per-variety Gemma-2-2B LoRA sarcasm adapters with adapter switching,
       carried over from the Gradio app (needs a CUDA GPU)

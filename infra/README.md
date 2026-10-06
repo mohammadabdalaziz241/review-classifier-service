@@ -159,6 +159,7 @@ and the deployed release are kept.
 | `scripts/aws.sh shell` | Root shell on the instance through Session Manager |
 | `scripts/aws.sh dashboard` | Grafana at http://localhost:3000 through a Session Manager tunnel; Ctrl+C closes it |
 | `scripts/aws.sh benchmark` | Load-tests the API from a container on the instance (about 4 minutes) and saves the report in `results/benchmarks/` |
+| `scripts/aws.sh benchmark --variant "NAME=VALUE ..."` | The same against a temporary copy of the API with other settings, e.g. `"BATCH_REQUESTS=true"`; `--variant baseline` for none. The copy is removed afterwards |
 
 `shell` and `dashboard` need the Session Manager plugin (`brew install --cask
 session-manager-plugin`). The dashboard is read-only and has no login: the tunnel is the

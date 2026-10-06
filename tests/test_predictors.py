@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import shutil
 import sys
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
@@ -164,3 +165,65 @@ def test_service_does_not_start_when_model_fails_to_load(tmp_path):
     settings = Settings(model_backend="hf", model_id=str(tmp_path / "missing"), device="cpu")
     with pytest.raises(ModelLoadError), TestClient(create_app(settings)):
         pass
+
+
+@pytest.mark.hf
+def test_inference_threads_setting(tiny_model_dir):
+    torch = pytest.importorskip("torch")
+    before = torch.get_num_threads()
+    try:
+        settings = Settings(
+            model_backend="hf", model_id=str(tiny_model_dir), device="cpu", inference_threads=1
+        )
+        with TestClient(create_app(settings)) as client:
+            assert client.get("/v1/model").json()["runtime"]["inference_threads"] == 1
+
+        # Applied in the thread that runs the pass, even one that already used torch.
+        predictor = HFPredictor(str(tiny_model_dir), device="cpu", threads=1)
+        seen = {}
+
+        def worker():
+            torch.set_num_threads(2)
+            predictor.predict(["great"])
+            seen["threads"] = torch.get_num_threads()
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        thread.join()
+        assert seen["threads"] == 1
+    finally:
+        torch.set_num_threads(before)
+
+
+@pytest.mark.hf
+def test_batched_requests_get_the_same_scores_as_single_ones(tiny_model_dir):
+    import json
+    import urllib.request
+    from concurrent.futures import ThreadPoolExecutor
+
+    from .live_server import live_server
+
+    texts = ["great product", "bad", "it was great", "the food was bad", "love it"] * 3
+    reference = HFPredictor(str(tiny_model_dir), device="cpu").predict(texts)
+    settings = Settings(
+        model_backend="hf", model_id=str(tiny_model_dir), device="cpu", batch_requests=True
+    )
+
+    with live_server(create_app(settings)) as url:
+
+        def post(text: str) -> dict:
+            request = urllib.request.Request(
+                f"{url}/v1/predict",
+                data=json.dumps({"text": text}).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=30) as r:
+                return json.loads(r.read())["prediction"]
+
+        with ThreadPoolExecutor(8) as pool:
+            served = list(pool.map(post, texts))
+
+    for got, want in zip(served, reference, strict=True):
+        assert got["label"] == want.label
+        for label, score in want.scores.items():
+            assert math.isclose(got["scores"][label], score, abs_tol=1e-5)

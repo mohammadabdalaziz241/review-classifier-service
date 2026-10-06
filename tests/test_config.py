@@ -46,6 +46,25 @@ def test_inference_concurrency(raw, expected):
     )
 
 
+def test_inference_runtime_settings():
+    defaults = Settings.from_env({})
+    assert defaults.inference_threads is None
+    assert defaults.batch_requests is False
+    assert (defaults.batch_max_texts, defaults.batch_wait_ms) == (16, 0)
+    settings = Settings.from_env(
+        {
+            "INFERENCE_THREADS": "2",
+            "BATCH_REQUESTS": "true",
+            "BATCH_MAX_TEXTS": "8",
+            "BATCH_WAIT_MS": "0",
+        }
+    )
+    assert settings.inference_threads == 2
+    assert settings.batch_requests is True
+    assert (settings.batch_max_texts, settings.batch_wait_ms) == (8, 0)
+    assert Settings.from_env({"BATCH_WAIT_MS": "5"}).batch_wait_ms == 5
+
+
 def test_metrics_port():
     assert Settings.from_env({}).metrics_port is None
     assert Settings.from_env({"METRICS_PORT": "9000"}).metrics_port == 9000
@@ -69,6 +88,14 @@ def test_serving_contract_is_unset_by_default():
         ({"PREPROCESS_REPLACE_URLS": "maybe"}, "must be true or false"),
         ({"METRICS_PORT": "70000"}, "must be a TCP port"),
         ({"MAX_CONCURRENT_INFERENCES": "-1"}, "positive"),
+        ({"INFERENCE_THREADS": "0"}, "positive"),
+        ({"BATCH_REQUESTS": "sometimes"}, "must be true or false"),
+        ({"BATCH_MAX_TEXTS": "0"}, "positive"),
+        ({"BATCH_WAIT_MS": "-5"}, "positive"),
+        (
+            {"BATCH_REQUESTS": "true", "MAX_CONCURRENT_INFERENCES": "unlimited"},
+            "BATCH_REQUESTS needs a limit",
+        ),
     ],
 )
 def test_invalid_values_fail_fast(env, message):

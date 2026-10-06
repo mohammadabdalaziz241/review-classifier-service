@@ -246,6 +246,7 @@ class _MetricsReader:
         "process_cpu_seconds_total",
         "model_inference_threads",
         "model_max_concurrent_inferences",
+        "model_dynamic_batching",
     )
 
     def __init__(self, url: str | None) -> None:
@@ -422,9 +423,11 @@ def conditions(url: str, metrics: _MetricsReader, duration: float, warmup: float
             for k in ("id", "version", "backend", "task", "device", "max_seq_length")
         },
         "limits": model.get("limits"),
+        "runtime": model.get("runtime"),
         "server": {
             "inference_threads": server.get("model_inference_threads"),
             "max_concurrent_inferences": server.get("model_max_concurrent_inferences"),
+            "dynamic_batching": server.get("model_dynamic_batching"),
             "metrics": bool(metrics.url),
         },
         "client": {
@@ -519,6 +522,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--duration", type=float, default=30.0, help="Seconds per scenario")
     parser.add_argument("--warmup", type=float, default=5.0, help="Uncounted seconds first")
     parser.add_argument(
+        "--wait", type=float, default=0.0, help="Seconds to wait for the service to be ready"
+    )
+    parser.add_argument(
         "--scenario",
         dest="scenarios",
         action="append",
@@ -537,11 +543,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     def progress(message: str) -> None:
         print(message, file=sys.stderr, flush=True)
 
-    try:
-        _get_json(args.url.rstrip("/") + "/ready")
-    except OSError as exc:
-        print(f"error: the service at {args.url} is not ready: {exc}", file=sys.stderr)
-        return 2
+    deadline = time.monotonic() + args.wait
+    while True:
+        try:
+            _get_json(args.url.rstrip("/") + "/ready")
+            break
+        except OSError as exc:
+            if time.monotonic() >= deadline:
+                print(f"error: the service at {args.url} is not ready: {exc}", file=sys.stderr)
+                return 2
+            time.sleep(2)
     report = run(
         args.url,
         args.scenarios or DEFAULT_SCENARIOS,

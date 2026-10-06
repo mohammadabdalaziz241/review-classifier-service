@@ -320,7 +320,25 @@ def build() -> dict[str, Any]:
             [target("http_requests_in_progress", "in progress")],
             description="Includes the Prometheus scrape itself.",
         ),
-        w=12,
+        w=6,
+        h=8,
+    )
+    g.add(
+        timeseries(
+            "Texts per forward pass",
+            [
+                target(
+                    "sum(rate(model_batch_texts_sum[$__rate_interval]))"
+                    " / sum(rate(model_batch_texts_count[$__rate_interval]))",
+                    "average",
+                )
+            ],
+            description=(
+                "With dynamic batching (BATCH_REQUESTS), requests that wait for the model "
+                "share a pass, so this rises with load. Without it, it is the texts per request."
+            ),
+        ),
+        w=6,
         h=8,
     )
 

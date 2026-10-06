@@ -8,6 +8,7 @@
 #   scripts/aws.sh shell     a root shell on the instance via Session Manager (no SSH)
 #   scripts/aws.sh dashboard Grafana at http://localhost:3000 through a Session Manager tunnel
 #   scripts/aws.sh benchmark load-test the API on the instance; saves results/benchmarks/
+#                            (--variant "NAME=VALUE ..." tests other settings; see below)
 #
 # Uses your AWS CLI credentials (AWS_PROFILE) and AWS_REGION (default eu-north-1).
 # Works with the bash 3.2 that ships with macOS.
@@ -181,22 +182,54 @@ cmd_dashboard() {
 # Runs the benchmark in a container on the instance, next to the API, so the network
 # between them is not part of the measurement. Extra arguments are passed on, e.g.
 #   scripts/aws.sh benchmark --duration 60 --scenario short-c4
+#
+# --variant "NAME=VALUE ..." benchmarks a temporary copy of the API with those settings
+# instead (same image and database, removed afterwards), to compare configurations
+# without redeploying; --variant baseline does the same with no overrides:
+#   scripts/aws.sh benchmark --variant baseline
+#   scripts/aws.sh benchmark --variant "INFERENCE_THREADS=2"
+#   scripts/aws.sh benchmark --variant "BATCH_REQUESTS=true"
 cmd_benchmark() {
-  local id type label command_id status output out stamp
+  local id type label command_id status output out stamp variant="" overrides="" target=api
+  if [ "${1:-}" = "--variant" ]; then
+    [ -n "${2:-}" ] || die "--variant needs a value, e.g. --variant baseline"
+    variant=$2
+    shift 2
+    if [ "$variant" != "baseline" ]; then
+      for setting in $variant; do
+        echo "$setting" | grep -Eq '^[A-Z][A-Z0-9_]*=[A-Za-z0-9._-]+$' ||
+          die "bad setting '$setting' in --variant: use NAME=VALUE, e.g. INFERENCE_THREADS=2"
+        overrides="$overrides -e $setting"
+      done
+    fi
+    target=bench-api
+  fi
   id=$(running_instance)
   type=$(field "$id" InstanceType)
   label="AWS $type ($REGION), client on the same instance"
   stamp=$(date -u +%Y%m%d-%H%M)
   out="results/benchmarks/aws-$type-$stamp.json"
+  if [ -n "$variant" ]; then
+    label="$label, variant: $variant"
+    out="results/benchmarks/aws-$type-$stamp-$(echo "$variant" | tr 'A-Z =' 'a-z--').json"
+  fi
   # The image is the deployed release; the API's metrics port is reachable inside
   # the stack's network only.
   command="set -e; cd /opt/review-classifier; . ./.env; rm -rf /tmp/bench; mkdir -m 777 /tmp/bench"
+  if [ -n "$variant" ]; then
+    command="$command; docker rm -f bench-api > /dev/null 2>&1 || true"
+    command="$command; trap 'docker rm -f bench-api > /dev/null 2>&1' EXIT"
+    command="$command; docker run -d --name bench-api --network review-classifier_default"
+    command="$command -e DATABASE_URL=postgresql://reviews:\$POSTGRES_PASSWORD@db:5432/reviews"
+    command="$command -e METRICS_PORT=9000 -e LOG_LEVEL=warning$overrides \$IMAGE > /dev/null"
+  fi
   command="$command; docker run --rm --network review-classifier_default -v /tmp/bench:/out"
-  command="$command \$IMAGE python -m review_classifier.benchmark --url http://api:8000"
-  command="$command --metrics-url http://api:9000/metrics --label '$label' --out /out/b.json $*"
+  command="$command \$IMAGE python -m review_classifier.benchmark --url http://$target:8000"
+  command="$command --metrics-url http://$target:9000/metrics --wait 300"
+  command="$command --label '$label' --out /out/b.json $*"
   command="$command; echo ===JSON===; cat /tmp/bench/b.json"
   case "$command" in *\"* | *\\*) die "benchmark arguments may not contain quotes or backslashes" ;; esac
-  echo "Running the benchmark on $id ($type); the standard set takes about 4 minutes..."
+  echo "Running the benchmark on $id ($type)${variant:+, variant: $variant}; the standard set takes about 4 minutes..."
   command_id=$(aws_ ssm send-command --instance-ids "$id" --document-name AWS-RunShellScript \
     --comment "benchmark" --timeout-seconds 600 \
     --parameters "{\"commands\":[\"$command\"],\"executionTimeout\":[\"3600\"]}" \
@@ -240,7 +273,7 @@ case "${1:-}" in
     cmd_benchmark "$@"
     ;;
   *)
-    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
     ;;
 esac

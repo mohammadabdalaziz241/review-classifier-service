@@ -59,8 +59,15 @@ CONFIDENCE_BUCKETS = (0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 1.0)
 UNMATCHED_ROUTE = "unmatched"
 
 
-def _inference_threads() -> int | None:
-    """Intra-op threads PyTorch uses for one forward pass, if torch is loaded."""
+def inference_threads(predictor: object | None = None) -> int | None:
+    """PyTorch threads per forward pass, if torch is in use.
+
+    PyTorch keeps this per thread, so the predictor's own report (from the thread
+    that ran the model) is preferred over what the calling thread sees.
+    """
+    reported = getattr(predictor, "inference_threads", None)
+    if isinstance(reported, int):
+        return reported
     torch = sys.modules.get("torch")
     if torch is None:
         return None
@@ -78,10 +85,12 @@ class _StateCollector(Collector):
         predictor: Callable[[], Predictor | None],
         store: Callable[[], PredictionStore | None],
         max_concurrent: int | None,
+        batching: bool,
     ) -> None:
         self._predictor = predictor
         self._store = store
         self._max_concurrent = max_concurrent
+        self._batching = batching
 
     def collect(self) -> Iterable[GaugeMetricFamily]:
         predictor = self._predictor()
@@ -99,7 +108,7 @@ class _StateCollector(Collector):
             info.add_metric([i.backend, i.model_id, i.version, i.task, i.device], 1)
         yield info
 
-        threads = _inference_threads()
+        threads = inference_threads(predictor)
         if threads is not None:
             yield GaugeMetricFamily(
                 "model_inference_threads", "PyTorch intra-op threads per forward pass.",
@@ -109,6 +118,11 @@ class _StateCollector(Collector):
             "model_max_concurrent_inferences",
             "Forward passes allowed at once (MAX_CONCURRENT_INFERENCES); 0 means unlimited.",
             value=self._max_concurrent or 0,
+        )
+        yield GaugeMetricFamily(
+            "model_dynamic_batching",
+            "1 when requests waiting for the model share forward passes (BATCH_REQUESTS).",
+            value=1 if self._batching else 0,
         )
 
         store = self._store()
@@ -127,11 +141,12 @@ class Telemetry:
         predictor: Callable[[], Predictor | None] = lambda: None,
         store: Callable[[], PredictionStore | None] = lambda: None,
         max_concurrent_inferences: int | None = None,
+        batching: bool = False,
     ) -> None:
         self.registry = registry = CollectorRegistry()
         ProcessCollector(registry=registry)  # memory, CPU, open files (Linux)
         PlatformCollector(registry=registry)  # Python version
-        registry.register(_StateCollector(predictor, store, max_concurrent_inferences))
+        registry.register(_StateCollector(predictor, store, max_concurrent_inferences, batching))
 
         self.http_requests = Counter(
             "http_requests",
@@ -151,20 +166,20 @@ class Telemetry:
         )
         self.inference_duration = Histogram(
             "model_inference_duration_seconds",
-            "Model time for one request (all its texts), excluding the wait for a slot.",
+            "Duration of the forward pass that served a request, excluding the wait for it.",
             ["endpoint"],
             buckets=LATENCY_BUCKETS,
             registry=registry,
         )
         self.inference_queue = Histogram(
             "model_inference_queue_seconds",
-            "Time a request waited for a free inference slot (MAX_CONCURRENT_INFERENCES).",
+            "Time a request waited for the model (a free slot, or the next batch).",
             buckets=QUEUE_BUCKETS,
             registry=registry,
         )
         self.batch_texts = Histogram(
             "model_batch_texts",
-            "Texts per inference call.",
+            "Texts per forward pass (more than one request's with dynamic batching).",
             buckets=BATCH_BUCKETS,
             registry=registry,
         )
@@ -221,12 +236,14 @@ class Telemetry:
         seconds: float,
     ) -> None:
         self.inference_duration.labels(endpoint).observe(seconds)
-        self.batch_texts.observe(len(texts))
         for text in texts:
             self.input_chars.observe(len(text))
         for prediction in predictions:
             self.predictions.labels(prediction.label).inc()
             self.confidence.observe(prediction.score)
+
+    def observe_pass(self, texts: int) -> None:
+        self.batch_texts.observe(texts)
 
     def observe_records(self, count: int, outcome: str) -> None:
         self.records.labels(outcome).inc(count)

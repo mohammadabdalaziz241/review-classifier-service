@@ -84,6 +84,17 @@ class Limits(BaseModel):
     )
 
 
+class Runtime(BaseModel):
+    inference_threads: int | None = Field(
+        description="PyTorch threads per forward pass; null when torch is not loaded."
+    )
+    batch_requests: bool = Field(
+        description="Requests waiting for the model share forward passes (dynamic batching)."
+    )
+    batch_max_texts: int | None = Field(description="Most texts per shared pass.")
+    batch_wait_ms: int | None = Field(description="Time a pass may wait to collect texts.")
+
+
 class Preprocessing(BaseModel):
     normalize_unicode: bool
     normalize_whitespace: bool
@@ -106,6 +117,7 @@ class ModelInfoResponse(BaseModel):
     max_seq_length: int
     preprocessing: Preprocessing
     limits: Limits
+    runtime: Runtime
 
 
 class StatusResponse(BaseModel):

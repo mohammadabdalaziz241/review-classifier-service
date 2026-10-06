@@ -126,11 +126,13 @@ class HFPredictor:
         device: str = "auto",
         max_seq_length: int | None = None,
         batch_size: int = 16,
+        threads: int | None = None,
     ) -> None:
         """Load a checkpoint.
 
         ``task`` and ``max_seq_length`` override the checkpoint's
         serving_config.json; leave them as None to use what the checkpoint declares.
+        ``threads`` sets PyTorch's intra-op threads (a process-wide setting).
         """
         try:
             import torch
@@ -142,6 +144,10 @@ class HFPredictor:
             ) from exc
 
         self._torch = torch
+        self._threads = threads
+        self._observed_threads: int | None = None
+        if threads is not None:
+            torch.set_num_threads(threads)
         self._device = self._resolve_device(device)
         self._batch_size = batch_size
 
@@ -226,8 +232,18 @@ class HFPredictor:
     def info(self) -> ModelInfo:
         return self._info
 
+    @property
+    def inference_threads(self) -> int:
+        """Threads per forward pass: as configured, else as seen in the last pass."""
+        return self._threads or self._observed_threads or int(self._torch.get_num_threads())
+
     def predict(self, texts: Sequence[str]) -> list[Prediction]:
         torch = self._torch
+        # PyTorch keeps the thread count per thread once a thread has used it, so
+        # apply it in whichever worker thread runs this pass.
+        if self._threads is not None and torch.get_num_threads() != self._threads:
+            torch.set_num_threads(self._threads)
+        self._observed_threads = torch.get_num_threads()
         results: list[Prediction] = []
         for start in range(0, len(texts), self._batch_size):
             chunk = list(texts[start : start + self._batch_size])
@@ -256,5 +272,6 @@ def create_predictor(settings: Settings) -> Predictor:
             device=settings.device,
             max_seq_length=settings.max_seq_length,
             batch_size=settings.inference_batch_size,
+            threads=settings.inference_threads,
         )
     raise ValueError(f"Unknown model backend: {settings.model_backend!r}")
