@@ -1,9 +1,9 @@
 # AWS deployment
 
 One EC2 instance runs the same Docker Compose stack as local development (PostgreSQL,
-migrations, API), with the model baked into an image stored in ECR. It is meant to run
-**on demand**: start it before a demo, stop it afterwards. Everything is created and
-removed by Terraform.
+migrations, API, and Prometheus, Grafana and a node exporter for monitoring), with the
+model baked into an image stored in ECR. It is meant to run **on demand**: start it before
+a demo, stop it afterwards. Everything is created and removed by Terraform.
 
 ```
  GitHub Actions ── OIDC (no keys) ──► IAM role ──► push image to ECR
@@ -12,6 +12,8 @@ removed by Terraform.
 
  EC2 c7i-flex.large (Amazon Linux 2023, default VPC, port 80 only, no SSH)
    systemd ──► start.sh ──► docker compose: db (PostgreSQL 16) ─ migrate ─ api :80
+                                            prometheus ◄── api :9000, node-exporter
+                                            grafana 127.0.0.1:3000 ◄── Session Manager tunnel
    container logs ──► CloudWatch Logs          CPU quiet 2 h ──► CloudWatch alarm stops it
 ```
 
@@ -155,6 +157,12 @@ and the deployed release are kept.
 | `scripts/aws.sh status` | State, URL, time running and its cost so far, current release |
 | `scripts/aws.sh logs` | Last 30 minutes of container logs; `scripts/aws.sh logs -f` to follow |
 | `scripts/aws.sh shell` | Root shell on the instance through Session Manager |
+| `scripts/aws.sh dashboard` | Grafana at http://localhost:3000 through a Session Manager tunnel; Ctrl+C closes it |
+| `scripts/aws.sh benchmark` | Load-tests the API from a container on the instance (about 4 minutes) and saves the report in `results/benchmarks/` |
+
+`shell` and `dashboard` need the Session Manager plugin (`brew install --cask
+session-manager-plugin`). The dashboard is read-only and has no login: the tunnel is the
+access control, and it needs your AWS credentials.
 
 **Forgot to stop it?** After 2 hours with CPU below 5% (5-minute averages), a CloudWatch
 alarm stops it, so a forgotten instance costs about $0.20, not $70 a month. Occasional
@@ -168,6 +176,25 @@ stopped, it picks the new release up on its next start.
 **Roll back:** releases are image digests; ECR keeps the last three. Set
 `/review-classifier/image` back to an earlier digest (ECR console → repository → image →
 digest) and run `scripts/aws.sh shell`, then `sudo /opt/review-classifier/start.sh`.
+
+## How a release reaches the instance
+
+Terraform's start-up script (`user_data`) runs once, on the instance's first boot: it
+installs Docker, adds swap, and writes `start.sh` and a systemd unit that runs it at every
+boot. Everything else comes from the release image:
+
+1. The Deploy workflow builds the image, which contains the production Compose file
+   ([`deploy/compose.yaml`](../deploy/compose.yaml)) and the monitoring configuration
+   ([`monitoring/`](../monitoring/)) under `/opt/release`, and records its digest in SSM.
+2. If the instance is running, the workflow installs this commit's
+   [`start.sh`](templates/start.sh) on it and runs it, through Session Manager.
+3. `start.sh` pulls the image, copies `/opt/release` out of it into
+   `/opt/review-classifier/release`, writes `.env` and runs `docker compose up`. Monitoring
+   containers are recreated only when their configuration changed.
+
+So code, model, Compose file and dashboards always change together, a rollback restores
+all of them, and changing the stack never requires replacing the instance (Terraform
+ignores later changes to `user_data`).
 
 ## Costs
 
@@ -191,6 +218,7 @@ Prices for eu-north-1 (Stockholm), on-demand, as of October 2026. Check the
 | CloudWatch alarm (1) | Within the always-free 10 alarms |
 | SSM parameters, Session Manager, IAM, OIDC | Free |
 | AWS Budgets | Free for alert-only budgets |
+| Prometheus, Grafana, node exporter | Free: they run on the instance, capped at about 1 GB of its 4 GB memory, using about 2 GB of disk (metrics kept 30 days or 1 GB) |
 | Data transfer | ECR → EC2 in the same region is free; API responses are tiny and the first 100 GB / month out are free |
 
 GitHub Actions minutes are free for public repositories.
@@ -221,8 +249,10 @@ above, including the budget. Do it before the credits or the Free plan period en
 
 ## Security notes
 
-- No SSH and no port 22: shell access and deploys go through Session Manager, authorised
-  by IAM.
+- No SSH and no port 22: shell access, deploys and the dashboard tunnel go through Session
+  Manager, authorised by IAM.
+- Only the API is public. Its metrics port, Prometheus and the node exporter are reachable
+  only inside the Compose network, and Grafana only on the instance's loopback interface.
 - No long-lived AWS keys anywhere: your Mac uses `aws login`, GitHub uses OIDC, and the
   instance uses its role. The GitHub role only trusts workflows on `main` of this
   repository and can only push to this ECR repository and run commands on this instance.
@@ -245,4 +275,7 @@ above, including the budget. Do it before the credits or the Free plan period en
 | `aws: error: ... login` or expired credentials | Run `aws login --profile admin` again |
 | `terraform apply` fails on the OIDC provider: already exists | Set `create_github_oidc_provider = false` in `terraform.tfvars` |
 | `terraform plan`: `timeout while waiting for plugin to start`, or `assertion failed [arm_interval()...]` | An Intel Terraform running under Rosetta on an Apple-chip Mac (Intel Homebrew in `/usr/local`). Install the `darwin_arm64` build from [releases.hashicorp.com](https://releases.hashicorp.com/terraform/), delete `.terraform`, and run `terraform init` again |
-| An error mentioning the Free plan | That service or size is not available on the Free plan; tell me which resource failed |
+| An error mentioning the Free plan | That service or instance size is not available on the Free plan; the error names the resource |
+| `dashboard` or `shell`: `SessionManagerPlugin is not found` | Install the plugin: `brew install --cask session-manager-plugin` (it asks for your Mac password) |
+| `dashboard`: port 3000 already in use | Use another local port: `DASHBOARD_PORT=3001 scripts/aws.sh dashboard` |
+| Dashboard panels say "No data" | Data starts when the stack does; panels about requests need some traffic. Check targets in Grafana: Explore → `up` |

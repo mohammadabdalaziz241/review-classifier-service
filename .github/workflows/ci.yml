@@ -97,7 +97,8 @@ jobs:
 
   docker:
     # Builds the real image with a model baked in, starts the whole stack
-    # (PostgreSQL, migrations, API) and runs the end-to-end smoke test against it.
+    # (PostgreSQL, migrations, API), runs the end-to-end smoke test and a short
+    # benchmark against it, then starts the monitoring stack and checks it.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -121,11 +122,28 @@ jobs:
         run: >-
           docker compose exec -T db psql -U reviews -d reviews
           -c "select endpoint, batch_index, label, model_version from predictions"
+      - name: The image carries the release's deployment files
+        run: docker compose exec -T api ls -R /opt/release
+      - name: Short benchmark inside the API container
+        run: >-
+          docker compose exec -T api python -m review_classifier.benchmark
+          --url http://127.0.0.1:8000 --metrics-url http://127.0.0.1:9000/metrics
+          --duration 5 --warmup 1 --scenario short-c4 --scenario batch8-long-c1
+          --fail-on-errors
+      - name: Check the Prometheus configuration and alert rules
+        run: >-
+          docker run --rm -v "$PWD/monitoring/prometheus:/etc/prometheus:ro"
+          --entrypoint promtool prom/prometheus:v3.15.0
+          check config /etc/prometheus/prometheus.yml
+      - name: Start monitoring (Prometheus, Grafana, node exporter) and check it
+        run: |
+          docker compose --profile monitoring up --detach
+          python scripts/check_monitoring.py
       - name: Image size
         run: docker image ls review-classifier
       - name: Service logs
         if: failure()
-        run: docker compose logs --no-color
+        run: docker compose --profile monitoring logs --no-color
       - name: Stop the stack
         if: always()
-        run: docker compose down --volumes
+        run: docker compose --profile monitoring down --volumes

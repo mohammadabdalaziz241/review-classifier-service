@@ -6,6 +6,8 @@
 #   scripts/aws.sh status    state, URL, running time and its approximate cost, release
 #   scripts/aws.sh logs      recent container logs (add -f to follow)
 #   scripts/aws.sh shell     a root shell on the instance via Session Manager (no SSH)
+#   scripts/aws.sh dashboard Grafana at http://localhost:3000 through a Session Manager tunnel
+#   scripts/aws.sh benchmark load-test the API on the instance; saves results/benchmarks/
 #
 # Uses your AWS CLI credentials (AWS_PROFILE) and AWS_REGION (default eu-north-1).
 # Works with the bash 3.2 that ships with macOS.
@@ -147,10 +149,81 @@ cmd_logs() {
   aws_ logs tail "/$PROJECT" --since 30m --format short $follow
 }
 
-cmd_shell() {
+need_plugin() {
   command -v session-manager-plugin > /dev/null ||
     die "install the Session Manager plugin: brew install --cask session-manager-plugin"
+}
+
+running_instance() {
+  local id
+  id=$(instance_id)
+  [ "$(field "$id" State.Name)" = "running" ] || die "the instance is not running: scripts/aws.sh start"
+  echo "$id"
+}
+
+cmd_shell() {
+  need_plugin
   aws_ ssm start-session --target "$(instance_id)"
+}
+
+cmd_dashboard() {
+  local id port
+  need_plugin
+  id=$(running_instance)
+  port=${DASHBOARD_PORT:-3000}
+  echo "Grafana: http://localhost:$port  (read-only; press Ctrl+C to close the tunnel)"
+  aws_ ssm start-session --target "$id" --document-name AWS-StartPortForwardingSession \
+    --parameters "{\"portNumber\":[\"3000\"],\"localPortNumber\":[\"$port\"]}"
+}
+
+# Runs the benchmark in a container on the instance, next to the API, so the network
+# between them is not part of the measurement. Extra arguments are passed on, e.g.
+#   scripts/aws.sh benchmark --duration 60 --scenario short-c4
+cmd_benchmark() {
+  local id type label command_id status output out stamp
+  id=$(running_instance)
+  type=$(field "$id" InstanceType)
+  label="AWS $type ($REGION), client on the same instance"
+  stamp=$(date -u +%Y%m%d-%H%M)
+  out="results/benchmarks/aws-$type-$stamp.json"
+  # The image is the deployed release; the API's metrics port is reachable inside
+  # the stack's network only.
+  command="set -e; cd /opt/review-classifier; . ./.env; rm -rf /tmp/bench; mkdir -m 777 /tmp/bench"
+  command="$command; docker run --rm --network review-classifier_default -v /tmp/bench:/out"
+  command="$command \$IMAGE python -m review_classifier.benchmark --url http://api:8000"
+  command="$command --metrics-url http://api:9000/metrics --label '$label' --out /out/b.json $*"
+  command="$command; echo ===JSON===; cat /tmp/bench/b.json"
+  case "$command" in *\"* | *\\*) die "benchmark arguments may not contain quotes or backslashes" ;; esac
+  echo "Running the benchmark on $id ($type); the standard set takes about 4 minutes..."
+  command_id=$(aws_ ssm send-command --instance-ids "$id" --document-name AWS-RunShellScript \
+    --comment "benchmark" --timeout-seconds 600 \
+    --parameters "{\"commands\":[\"$command\"],\"executionTimeout\":[\"3600\"]}" \
+    --query Command.CommandId --output text)
+  status=Pending
+  for _ in $(seq 1 180); do
+    sleep 10
+    status=$(aws_ ssm get-command-invocation --command-id "$command_id" --instance-id "$id" \
+      --query Status --output text 2> /dev/null || echo Pending)
+    case "$status" in Pending | InProgress | Delayed) printf "." ;; *) break ;; esac
+  done
+  echo
+  output=$(aws_ ssm get-command-invocation --command-id "$command_id" --instance-id "$id" \
+    --query StandardOutputContent --output text)
+  if [ "$status" != "Success" ]; then
+    echo "$output"
+    aws_ ssm get-command-invocation --command-id "$command_id" --instance-id "$id" \
+      --query StandardErrorContent --output text >&2
+    die "the benchmark ended with status $status"
+  fi
+  mkdir -p results/benchmarks
+  printf '%s\n' "$output" | sed '/^===JSON===$/,$d'
+  printf '%s\n' "$output" | sed '1,/^===JSON===$/d' > "$out"
+  echo
+  if ! python3 -m json.tool "$out" > /dev/null 2>&1; then
+    mv "$out" "$out.txt"
+    die "the report is incomplete (output longer than SSM returns?); raw output in $out.txt"
+  fi
+  echo "Saved $out"
 }
 
 case "${1:-}" in
@@ -159,8 +232,13 @@ case "${1:-}" in
   status) cmd_status ;;
   logs) cmd_logs "${2:-}" ;;
   shell) cmd_shell ;;
+  dashboard) cmd_dashboard ;;
+  benchmark)
+    shift
+    cmd_benchmark "$@"
+    ;;
   *)
-    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
     ;;
 esac

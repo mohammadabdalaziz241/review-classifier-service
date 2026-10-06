@@ -60,6 +60,7 @@ def test_model_info(client, settings):
     assert body["limits"] == {
         "max_text_chars": settings.max_text_chars,
         "max_batch_size": settings.max_batch_size,
+        "max_concurrent_inferences": settings.max_concurrent_inferences,
     }
 
 

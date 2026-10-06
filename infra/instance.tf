@@ -157,7 +157,6 @@ resource "aws_instance" "app" {
     param_prefix    = local.param_prefix
     log_group       = local.log_group
     compose_version = var.compose_version
-    compose_b64     = base64encode(file("${path.module}/templates/compose.yaml"))
     start_b64       = base64encode(file("${path.module}/templates/start.sh"))
     unit_b64        = base64encode(file("${path.module}/templates/review-classifier.service"))
   })
@@ -168,7 +167,11 @@ resource "aws_instance" "app" {
   }
 
   lifecycle {
-    ignore_changes = [ami]
+    # user_data runs only on an instance's first boot. Later versions of start.sh are
+    # installed by the Deploy workflow, and the Compose file and monitoring
+    # configuration ship inside each release image, so a change here must not
+    # stop or replace the running instance.
+    ignore_changes = [ami, user_data]
   }
 
   depends_on = [aws_iam_role_policy.instance]

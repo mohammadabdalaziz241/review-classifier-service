@@ -39,6 +39,8 @@ from review_classifier.store import (  # noqa: E402
     text_sha256,
 )
 
+from .scrape import parse, value  # noqa: E402
+
 UNREACHABLE = "postgresql://user:secret@127.0.0.1:1/nowhere"
 
 
@@ -344,6 +346,19 @@ def test_feedback_round_trip(api):
     assert again.json()["error"]["code"] == "feedback_exists"
 
 
+def test_recording_and_feedback_are_measured(api):
+    first = api.post("/v1/predict", json={"text": "I love it"}).json()["prediction"]
+    second = api.post("/v1/predict", json={"text": "Terrible, broke at once"}).json()["prediction"]
+    api.post("/v1/feedback", json={"prediction_id": first["id"], "label": first["label"]})
+    wrong = "negative" if second["label"] != "negative" else "positive"
+    api.post("/v1/feedback", json={"prediction_id": second["id"], "label": wrong})
+    samples = parse(api.get("/metrics").text)
+    assert value(samples, "db_up") == 1
+    assert value(samples, "db_prediction_records_total", outcome="recorded") == 2
+    assert value(samples, "feedback_total", model_correct="true") == 1
+    assert value(samples, "feedback_total", model_correct="false") == 1
+
+
 @pytest.mark.parametrize(
     ("payload", "status", "code", "detail_type"),
     [
@@ -398,6 +413,9 @@ def test_service_runs_while_the_database_is_down():
         response = client.post("/v1/predict", json={"text": "great"})
         assert response.status_code == 200
         assert response.json()["recorded"] is False
+        samples = parse(client.get("/metrics").text)
+        assert value(samples, "db_up") == 0
+        assert value(samples, "db_prediction_records_total", outcome="not_recorded") == 1
         feedback = client.post(
             "/v1/feedback",
             json={"prediction_id": response.json()["prediction"]["id"], "label": "positive"},

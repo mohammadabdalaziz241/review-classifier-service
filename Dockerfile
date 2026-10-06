@@ -63,6 +63,13 @@ RUN groupadd --system --gid 10001 app \
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=model /opt/hf /opt/hf
 COPY --from=model /opt/models /opt/models
+# The release's deployment files: the production Compose file and the monitoring
+# configuration. The AWS instance copies them out of the image it deploys, so they
+# always match the code they run with (see infra/templates/start.sh).
+COPY deploy/compose.yaml /opt/release/compose.yaml
+COPY monitoring/prometheus /opt/release/monitoring/prometheus
+COPY monitoring/grafana/provisioning /opt/release/monitoring/grafana/provisioning
+COPY monitoring/grafana/dashboards /opt/release/monitoring/grafana/dashboards
 
 # The image serves exactly the model it was built with, with the network off.
 ENV PATH=/opt/venv/bin:$PATH \

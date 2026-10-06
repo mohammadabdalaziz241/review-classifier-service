@@ -124,10 +124,15 @@ jobs:
             echo "running=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Install this commit's start.sh (it also runs at every boot), then run it.
+          script=$(base64 -w0 infra/templates/start.sh)
+          dir=/opt/review-classifier
+          command="echo $script | base64 -d > $dir/start.sh.new && chmod 755 $dir/start.sh.new"
+          command="$command && mv $dir/start.sh.new $dir/start.sh && $dir/start.sh"
           command_id=$(aws ssm send-command --instance-ids "$id" \
             --document-name AWS-RunShellScript \
             --comment "deploy ${{ github.sha }}" \
-            --parameters 'commands=["/opt/review-classifier/start.sh"]' \
+            --parameters "$(jq -n --arg c "$command" '{commands: [$c]}')" \
             --query Command.CommandId --output text)
           status=Pending
           for _ in $(seq 1 90); do
@@ -164,6 +169,7 @@ jobs:
               if [ "${{ steps.rollout.outputs.running }}" = "true" ]; then
                 if [ "${{ job.status }}" = "success" ]; then
                   echo "- Live at ${{ steps.rollout.outputs.url }} (smoke-tested)"
+                  echo "- Dashboard: \`scripts/aws.sh dashboard\`, then http://localhost:3000"
                 else
                   echo "- Rolled out to ${{ steps.rollout.outputs.url }}, but the smoke test failed"
                 fi

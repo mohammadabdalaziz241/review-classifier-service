@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 import uuid
 from collections.abc import AsyncIterator, Sequence
@@ -16,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import __version__
@@ -39,6 +40,7 @@ from .schemas import (
     StatusResponse,
 )
 from .serving_config import resolve_preprocessing
+from .telemetry import CONTENT_TYPE_LATEST, UNMATCHED_ROUTE, Telemetry
 
 if TYPE_CHECKING:  # the database layer is optional: pip install '.[db]'
     from .store import PredictionStore
@@ -171,9 +173,17 @@ def create_app(
             logger.info("DATABASE_URL not set: predictions are not recorded")
         else:
             app.state.store.check_schema()
+        if settings.metrics_port is not None:
+            telemetry.serve(settings.metrics_port)
+            logger.info("metrics on port %d at /metrics", settings.metrics_port)
+        logger.info(
+            "inference concurrency limit=%s",
+            settings.max_concurrent_inferences or "unlimited",
+        )
         try:
             yield
         finally:
+            telemetry.stop()
             if app.state.store is not None:
                 app.state.store.close()
             app.state.store = None
@@ -189,6 +199,19 @@ def create_app(
     app.state.settings = settings
     app.state.predictor = None
     app.state.store = None
+    telemetry = Telemetry(
+        predictor=lambda: app.state.predictor,
+        store=lambda: app.state.store,
+        max_concurrent_inferences=settings.max_concurrent_inferences,
+    )
+    app.state.telemetry = telemetry
+    # Forward passes allowed at once. Requests beyond the limit wait their turn
+    # (in the worker thread pool) instead of competing for the same CPU cores.
+    inference_slots = (
+        threading.BoundedSemaphore(settings.max_concurrent_inferences)
+        if settings.max_concurrent_inferences
+        else None
+    )
     app.state.preprocessing, app.state.preprocessing_source = resolve_preprocessing(
         settings.preprocessing_overrides(), None
     )
@@ -201,6 +224,7 @@ def create_app(
         request_id = incoming if _VALID_REQUEST_ID.match(incoming) else uuid.uuid4().hex
         request.state.request_id = request_id
         started = time.perf_counter()
+        telemetry.http_in_progress.inc()
         try:
             response = await call_next(request)
         except Exception:
@@ -209,7 +233,14 @@ def create_app(
             response = _error_response(
                 request, 500, "internal_error", "An unexpected error occurred."
             )
-        elapsed_ms = (time.perf_counter() - started) * 1000
+        finally:
+            telemetry.http_in_progress.dec()
+        elapsed = time.perf_counter() - started
+        elapsed_ms = elapsed * 1000
+        # The route template (/v1/predict), never the raw path, keeps label values bounded.
+        route = getattr(request.scope.get("route"), "path", UNMATCHED_ROUTE)
+        if route != "/metrics":
+            telemetry.observe_request(request.method, route, response.status_code, elapsed)
         response.headers[REQUEST_ID_HEADER] = request_id
         response.headers["X-Process-Time-Ms"] = f"{elapsed_ms:.2f}"
         # Request text is deliberately not logged: reviews can contain personal data.
@@ -296,6 +327,7 @@ def create_app(
         ids = [uuid.uuid4() for _ in predictions]
         current_store = request.app.state.store
         if current_store is None:
+            telemetry.observe_records(len(ids), "disabled")
             return ids, False
         from .store import PredictionRecord, text_sha256
 
@@ -321,29 +353,42 @@ def create_app(
                 zip(ids, raw_texts, predictions, strict=True)
             )
         ]
-        return ids, current_store.record(rows)
+        recorded = current_store.record(rows)
+        telemetry.observe_records(len(ids), "recorded" if recorded else "not_recorded")
+        return ids, recorded
 
-    def run(model: Predictor, texts: list[str]) -> tuple[list[Prediction], float]:
-        started = time.perf_counter()
-        predictions = model.predict(texts)
-        elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
+    def run(model: Predictor, texts: list[str], endpoint: str) -> tuple[list[Prediction], float]:
+        waiting = time.perf_counter()
+        if inference_slots is not None:
+            inference_slots.acquire()
+        try:
+            started = time.perf_counter()
+            telemetry.inference_queue.observe(started - waiting)
+            predictions = model.predict(texts)
+            elapsed = time.perf_counter() - started
+        finally:
+            if inference_slots is not None:
+                inference_slots.release()
         if len(predictions) != len(texts):
             raise RuntimeError(f"Predictor returned {len(predictions)} results for {len(texts)}")
-        return predictions, elapsed_ms
+        telemetry.observe_inference(endpoint, texts, predictions, elapsed)
+        return predictions, round(elapsed * 1000, 3)
 
     # ---- routes -------------------------------------------------------------
     # Inference routes are sync functions: FastAPI runs them in a worker thread,
-    # so a slow forward pass does not block the event loop.
+    # so a slow forward pass does not block the event loop. Health checks and
+    # metrics are async and never block, so they answer even when every worker
+    # thread is busy or waiting for an inference slot.
 
     @app.get(
         "/health", response_model=StatusResponse, response_model_exclude_none=True, tags=["ops"]
     )
-    def health() -> StatusResponse:
+    async def health() -> StatusResponse:
         """Liveness: the process is up and serving HTTP."""
         return StatusResponse(status="ok")
 
     @app.get("/ready", response_model=StatusResponse, tags=["ops"])
-    def ready(request: Request) -> StatusResponse:
+    async def ready(request: Request) -> StatusResponse:
         """Readiness: the model is loaded and requests can be served.
 
         The database is reported but does not affect readiness: predictions are
@@ -353,6 +398,13 @@ def create_app(
         current_store = request.app.state.store
         database = "disabled" if current_store is None else current_store.status
         return StatusResponse(status="ready", database=database)
+
+    if settings.metrics_port is None:
+
+        @app.get("/metrics", include_in_schema=False)
+        async def metrics() -> Response:
+            """Prometheus metrics (served on METRICS_PORT instead when that is set)."""
+            return Response(telemetry.render(), media_type=CONTENT_TYPE_LATEST)
 
     @app.get("/v1/model", response_model=ModelInfoResponse, tags=["model"])
     def model_info(request: Request) -> ModelInfoResponse:
@@ -372,7 +424,9 @@ def create_app(
                 source=request.app.state.preprocessing_source,
             ),
             limits=Limits(
-                max_text_chars=settings.max_text_chars, max_batch_size=settings.max_batch_size
+                max_text_chars=settings.max_text_chars,
+                max_batch_size=settings.max_batch_size,
+                max_concurrent_inferences=settings.max_concurrent_inferences,
             ),
         )
 
@@ -380,7 +434,7 @@ def create_app(
     def predict(body: PredictRequest, request: Request) -> PredictResponse:
         model = get_predictor(request)
         texts = prepare(request, [body.text], "text", indexed=False)
-        predictions, elapsed_ms = run(model, texts)
+        predictions, elapsed_ms = run(model, texts, "predict")
         ids, recorded = record(request, model, "predict", [body.text], predictions, elapsed_ms)
         return PredictResponse(
             request_id=request.state.request_id,
@@ -407,7 +461,7 @@ def create_app(
                 ],
             )
         texts = prepare(request, body.texts, "texts", indexed=True)
-        predictions, elapsed_ms = run(model, texts)
+        predictions, elapsed_ms = run(model, texts, "predict_batch")
         ids, recorded = record(request, model, "predict_batch", body.texts, predictions, elapsed_ms)
         return BatchPredictResponse(
             request_id=request.state.request_id,
@@ -472,6 +526,7 @@ def create_app(
             raise APIError(
                 503, "database_unavailable", "The database is unavailable; try again later."
             ) from exc
+        telemetry.observe_feedback(result.model_was_correct)
         return FeedbackResponse(
             id=result.id,
             prediction_id=result.prediction_id,

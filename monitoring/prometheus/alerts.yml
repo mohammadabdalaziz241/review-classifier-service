@@ -1,0 +1,67 @@
+# Alert rules. They are evaluated by Prometheus and shown on the Grafana dashboard
+# ("Firing alerts") and in Prometheus; no notification channel is configured.
+groups:
+  - name: review-classifier
+    rules:
+      - alert: APIDown
+        expr: up{job="api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: The API's metrics endpoint has not answered for 2 minutes.
+
+      - alert: ModelNotReady
+        expr: model_ready == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: The API is up but its model has not been ready for 5 minutes.
+
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{route=~"/v1/.*", status=~"5.."}[5m]))
+            / sum(rate(http_requests_total{route=~"/v1/.*"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "More than 5% of API requests failed with a server error (5xx) for 5 minutes."
+
+      - alert: SlowPredictions
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(http_request_duration_seconds_bucket{route="/v1/predict"}[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 latency of POST /v1/predict has been above 1 s for 10 minutes."
+
+      - alert: DatabaseUnavailable
+        expr: db_up == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Predictions are served but not recorded; the database has been unavailable for 5 minutes.
+
+      - alert: HostMemoryHigh
+        expr: 1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: The host has used more than 90% of its memory for 10 minutes.
+
+      - alert: DiskAlmostFull
+        expr: |
+          node_filesystem_avail_bytes{mountpoint="/", fstype!~"tmpfs|overlay"}
+            / node_filesystem_size_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} < 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Less than 10% of the root disk is free.

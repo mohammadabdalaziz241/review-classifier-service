@@ -34,6 +34,21 @@ def _int(env: Mapping[str, str], name: str, default: int | None) -> int | None:
     return value
 
 
+def _concurrency(env: Mapping[str, str], default: int | None) -> int | None:
+    """MAX_CONCURRENT_INFERENCES: a positive integer, or 0 / "unlimited" for no limit."""
+    raw = env.get("MAX_CONCURRENT_INFERENCES", "").strip().lower()
+    if raw in ("0", "unlimited"):
+        return None
+    return _int(env, "MAX_CONCURRENT_INFERENCES", default)
+
+
+def _port(env: Mapping[str, str], name: str) -> int | None:
+    value = _int(env, name, None)
+    if value is not None and value > 65535:
+        raise ValueError(f"{name} must be a TCP port (1-65535), got {value}")
+    return value
+
+
 def _bool(env: Mapping[str, str], name: str) -> bool | None:
     raw = env.get(name, "").strip().lower()
     if not raw:
@@ -73,6 +88,13 @@ class Settings:
     max_text_chars: int = 2000
     max_batch_size: int = 32
     inference_batch_size: int = 16
+    # Forward passes allowed at once; further requests wait. On a CPU, concurrent
+    # passes compete for the same cores, so 1 keeps latency predictable. None: unlimited.
+    max_concurrent_inferences: int | None = 1
+
+    # Serve Prometheus metrics on this port instead of at /metrics on the API port,
+    # so they can stay off the public interface. None: /metrics on the API.
+    metrics_port: int | None = None
 
     # Serving contract. None = use the checkpoint's serving_config.json, then a default.
     # The task is a descriptive label; it never changes what the model predicts.
@@ -99,6 +121,8 @@ class Settings:
             max_text_chars=_int(env, "MAX_TEXT_CHARS", defaults.max_text_chars),
             max_batch_size=_int(env, "MAX_BATCH_SIZE", defaults.max_batch_size),
             inference_batch_size=_int(env, "INFERENCE_BATCH_SIZE", defaults.inference_batch_size),
+            max_concurrent_inferences=_concurrency(env, defaults.max_concurrent_inferences),
+            metrics_port=_port(env, "METRICS_PORT"),
             task=env.get("MODEL_TASK", "").strip() or None,
             max_seq_length=_int(env, "MAX_SEQ_LENGTH", None),
             **{key: _bool(env, PREPROCESSING_ENV[key]) for key in PREPROCESSING_KEYS},

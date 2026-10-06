@@ -5,6 +5,12 @@
 #
 # The API is on http://127.0.0.1:8000. PostgreSQL is reachable only inside the
 # stack:  docker compose exec db psql -U reviews reviews
+#
+# With monitoring (Prometheus, Grafana, node exporter), the same as on AWS:
+#
+#   docker compose --profile monitoring up --build
+#
+# Grafana: http://127.0.0.1:3000   Prometheus: http://127.0.0.1:9090
 
 name: review-classifier
 
@@ -55,6 +61,9 @@ services:
     environment:
       DATABASE_URL: *database-url
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      MAX_CONCURRENT_INFERENCES: ${MAX_CONCURRENT_INFERENCES:-1}
+      # Metrics on their own port, for Prometheus inside the stack (as on AWS).
+      METRICS_PORT: "9000"
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
@@ -65,8 +74,59 @@ services:
     init: true
     restart: unless-stopped
 
+  # ---- monitoring (docker compose --profile monitoring up) ------------------------
+  # The configuration in monitoring/ is the one each release ships to AWS.
+
+  prometheus:
+    profiles: [monitoring]
+    image: prom/prometheus:v3.15.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    restart: unless-stopped
+
+  node-exporter:
+    profiles: [monitoring]
+    image: prom/node-exporter:v1.12.1
+    command: ["--path.rootfs=/host"]
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    restart: unless-stopped
+
+  grafana:
+    profiles: [monitoring]
+    image: grafana/grafana:13.2.3
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/review-classifier.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_LOG_LEVEL: warn
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  prometheus-data:
+  grafana-data:
 
 secrets:
   hf_token:

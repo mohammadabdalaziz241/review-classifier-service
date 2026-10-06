@@ -79,6 +79,9 @@ class FeedbackResponse(BaseModel):
 class Limits(BaseModel):
     max_text_chars: int
     max_batch_size: int
+    max_concurrent_inferences: int | None = Field(
+        description="Forward passes run at once; further requests wait. null: unlimited."
+    )
 
 
 class Preprocessing(BaseModel):

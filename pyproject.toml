@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 authors = [{ name = "Mohammad Abdalaziz" }]
 dependencies = [
     "fastapi>=0.110,<1.0",
+    "prometheus-client>=0.20",
     "pydantic>=2.6,<3.0",
     "uvicorn[standard]>=0.29",
 ]

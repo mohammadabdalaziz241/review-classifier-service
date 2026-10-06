@@ -39,6 +39,18 @@ def test_reads_environment():
     assert settings.max_seq_length == 256
 
 
+@pytest.mark.parametrize(("raw", "expected"), [("", 1), ("2", 2), ("0", None), ("unlimited", None)])
+def test_inference_concurrency(raw, expected):
+    assert Settings.from_env({"MAX_CONCURRENT_INFERENCES": raw}).max_concurrent_inferences == (
+        expected
+    )
+
+
+def test_metrics_port():
+    assert Settings.from_env({}).metrics_port is None
+    assert Settings.from_env({"METRICS_PORT": "9000"}).metrics_port == 9000
+
+
 def test_serving_contract_is_unset_by_default():
     # None means "let the checkpoint decide", so nothing is forced on it.
     settings = Settings.from_env({})
@@ -55,6 +67,8 @@ def test_serving_contract_is_unset_by_default():
         ({"MODEL_BACKEND": "onnx"}, "MODEL_BACKEND must be one of"),
         ({"DEVICE": "tpu"}, "DEVICE must be one of"),
         ({"PREPROCESS_REPLACE_URLS": "maybe"}, "must be true or false"),
+        ({"METRICS_PORT": "70000"}, "must be a TCP port"),
+        ({"MAX_CONCURRENT_INFERENCES": "-1"}, "positive"),
     ],
 )
 def test_invalid_values_fail_fast(env, message):

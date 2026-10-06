@@ -1,4 +1,5 @@
-# Only what the image needs: pyproject.toml, README.md, src/ and models/.
+# Only what the image needs: pyproject.toml, README.md, src/ and models/, plus the
+# release's deployment files (deploy/ and monitoring/).
 .git
 .github
 .venv
@@ -16,5 +17,7 @@ results/
 notebooks/
 scripts/
 tests/
+infra/
+docs/
 compose.yaml
 Dockerfile
