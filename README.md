@@ -707,24 +707,3 @@ notebooks/
 results/             manifests and evaluation reports of the published models
 tests/               unit and integration tests
 ```
-
-## Roadmap
-
-- [x] **1. Local service** — FastAPI endpoints, validation, error handling, tests, CI
-- [x] **1b. Own model** — pooled RoBERTa sentiment and sarcasm models retrained, published
-      at pinned commits, and served metrics verified against training
-- [x] **2. Packaging** — multi-stage Docker image with the model baked in and verified at
-      build time; Docker Compose stack; CI builds it and smoke-tests the running stack
-- [x] **3. Persistence** — PostgreSQL records of every prediction, labelled feedback with
-      hash-checked text, Alembic migrations, graceful degradation when the database is down
-- [x] **4. Cloud** — on-demand AWS deployment: Terraform, ECR, EC2 with Session Manager,
-      OIDC release workflow, CloudWatch logs, idle auto-stop, budget alert; released and
-      smoke-tested on a real account
-- [x] **5. Operations** — Prometheus metrics, Grafana dashboard and alert rules as code,
-      monitoring on the instance behind a tunnel, deployment files shipped in each release,
-      and a reproducible benchmark of latency, throughput, memory and error rate, run on AWS
-- [x] **6. Throughput** — dynamic batching on the server, `INFERENCE_THREADS`, and benchmark
-      variants to compare configurations on the instance: [+79% throughput and −43% p95
-      latency](#throughput-dynamic-batching) under load on the same hardware
-- [ ] Later: the per-variety Gemma-2-2B LoRA sarcasm adapters with adapter switching,
-      carried over from the Gradio app (needs a CUDA GPU)
