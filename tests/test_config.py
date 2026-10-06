@@ -41,15 +41,14 @@ def test_reads_environment():
 
 @pytest.mark.parametrize(("raw", "expected"), [("", 1), ("2", 2), ("0", None), ("unlimited", None)])
 def test_inference_concurrency(raw, expected):
-    assert Settings.from_env({"MAX_CONCURRENT_INFERENCES": raw}).max_concurrent_inferences == (
-        expected
-    )
+    env = {"MAX_CONCURRENT_INFERENCES": raw, "BATCH_REQUESTS": "false"}
+    assert Settings.from_env(env).max_concurrent_inferences == expected
 
 
 def test_inference_runtime_settings():
     defaults = Settings.from_env({})
     assert defaults.inference_threads is None
-    assert defaults.batch_requests is False
+    assert defaults.batch_requests is True
     assert (defaults.batch_max_texts, defaults.batch_wait_ms) == (16, 0)
     settings = Settings.from_env(
         {

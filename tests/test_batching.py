@@ -324,15 +324,24 @@ def test_api_batches_concurrent_requests():
     assert runtime["batch_max_texts"] == 8
 
 
-def test_api_batching_off_by_default(client):
+def test_api_batching_is_on_by_default(client):
     runtime = client.get("/v1/model").json()["runtime"]
-    assert runtime == {
-        "inference_threads": runtime["inference_threads"],
-        "batch_requests": False,
-        "batch_max_texts": None,
-        "batch_wait_ms": None,
-    }
-    assert value(parse(client.get("/metrics").text), "model_dynamic_batching") == 0
+    assert runtime["batch_requests"] is True
+    assert (runtime["batch_max_texts"], runtime["batch_wait_ms"]) == (16, 0)
+    assert value(parse(client.get("/metrics").text), "model_dynamic_batching") == 1
+
+
+def test_api_batching_can_be_turned_off():
+    with TestClient(create_app(Settings(model_backend="dummy", batch_requests=False))) as c:
+        runtime = c.get("/v1/model").json()["runtime"]
+        assert runtime == {
+            "inference_threads": runtime["inference_threads"],
+            "batch_requests": False,
+            "batch_max_texts": None,
+            "batch_wait_ms": None,
+        }
+        assert value(parse(c.get("/metrics").text), "model_dynamic_batching") == 0
+        assert c.post("/v1/predict", json={"text": "I love it"}).status_code == 200
 
 
 def test_api_with_batching_answers_single_and_batch_requests():

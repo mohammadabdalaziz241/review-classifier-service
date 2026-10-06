@@ -14,11 +14,12 @@ every prediction and of user feedback, an on-demand AWS deployment defined in Te
 Prometheus metrics with a Grafana dashboard and alert rules, a reproducible load benchmark,
 and tests for all of it.
 
-> **Status:** milestones 1–5 done: the project's own retrained RoBERTa models, served metrics
+> **Status:** milestones 1–6 done: the project's own retrained RoBERTa models, served metrics
 > verified against training ([results](#results)), packaged as a Docker image with
 > PostgreSQL, deployed on demand to AWS by a GitHub Actions workflow that smoke-tests the
-> live service, monitored with Prometheus and Grafana, and
-> [benchmarked on AWS](#results-on-aws). Next: throughput. See the [roadmap](#roadmap).
+> live service, monitored with Prometheus and Grafana, [benchmarked on AWS](#results-on-aws),
+> and given [79% more throughput under load](#throughput-dynamic-batching) by batching
+> requests on the server. See the [roadmap](#roadmap).
 
 ## Results
 
@@ -268,6 +269,41 @@ time, 30 s per scenario after a 5 s warm-up, 6 October 2026. Full report:
 *The dashboard while the benchmark ran: traffic, server latency (p95 1.95 s at 16 clients),
 model time against queue wait, the label mix and confidence, input lengths, and memory and
 CPU.*
+
+### Throughput: dynamic batching
+
+The table above showed the model was the bottleneck, that batches classified more than twice
+as many texts per second, and that one of the two vCPUs sat idle. Five configurations were
+then benchmarked on the same instance in one session, each as a temporary copy of the
+deployed API (`scripts/aws.sh benchmark --variant …`), with the standard scenarios (6 October
+2026; reports in [`results/benchmarks/`](results/benchmarks/)):
+
+| Configuration | 1 client: req/s, p50 | 4 clients: req/s, p50 | 16 clients: req/s, p50, p95 | Long reviews, 4 clients: req/s |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline: one pass at a time, 1 thread | 11.0, 88 ms | 11.0, 349 ms | 11.3, 1,372 ms, 1,624 ms | 3.1 |
+| 2 PyTorch threads | 11.0, 82 ms | 11.4, 332 ms | 11.1, 1,371 ms, 1,735 ms | 3.2 |
+| **Dynamic batching** | **11.7, 83 ms** | **16.4, 236 ms** | **20.3, 766 ms, 921 ms** | **3.2** |
+| Batching + 2 threads | 11.2, 80 ms | 16.5, 243 ms | 20.3, 779 ms, 1,100 ms | 3.1 |
+| Batching + 2 passes at once | 11.4, 85 ms | 15.3, 261 ms | 20.2, 974 ms, 1,289 ms | 3.6 |
+
+- **Dynamic batching is the win:** with 16 concurrent clients it served **79% more
+  requests** (11.3 → 20.3 per second) and cut **median latency by 44%** (1.37 → 0.77 s) and
+  **p95 by 43%** (1.62 → 0.92 s). With 4 clients: +49% throughput, −32% median latency.
+- **No cost when traffic is light:** a lone client is as fast as before (83 vs 88 ms), because
+  a request on an idle server runs at once; batches form only while others wait.
+- **The second vCPU does not help:** the c7i-flex.large's two vCPUs are one physical core
+  with hyperthreading. Two PyTorch threads kept both busy (1.8 cores of CPU instead of 1.0)
+  for the same throughput and worse tail latency, so the default stays at one thread.
+  Two passes at once helped only long reviews (+18%) and added latency for short ones.
+- **Long reviews barely change** (+5%): at about 250 tokens each, a single pass is already
+  compute-bound, so sharing a pass saves little.
+- **Chosen configuration**, now the default: dynamic batching, one pass at a time, PyTorch's
+  default threads. No errors in any of the 7,466 requests.
+
+The baseline here is faster than the [milestone 5 run](#results-on-aws) (11.0 vs 9.1
+requests per second with one client). That run measured the production container on the
+previous release; this table compares configurations side by side in one session, on the
+same release, which is the fair comparison.
 
 ## Train the project's model
 
@@ -528,8 +564,8 @@ All settings are environment variables, validated at startup.
 | `INFERENCE_BATCH_SIZE` | `16`                                                | Texts per forward pass |
 | `MAX_CONCURRENT_INFERENCES` | `1`                                            | Forward passes at once; others wait. `0` for no limit ([why 1](#design-decisions)) |
 | `METRICS_PORT`         | unset (`/metrics` on the API port)                  | Serve metrics on this port only, e.g. `9000`, to keep them off the public interface |
-| `INFERENCE_THREADS`    | PyTorch's default (one per physical core)           | Threads per forward pass |
-| `BATCH_REQUESTS`       | `false`                                             | Dynamic batching: requests waiting for the model share its next forward pass ([how](#design-decisions)) |
+| `INFERENCE_THREADS`    | PyTorch's default (one per physical core)           | Threads per forward pass; on a hyperthreaded vCPU pair, 2 [did not help](#throughput-dynamic-batching) |
+| `BATCH_REQUESTS`       | `true`                                              | Dynamic batching: requests waiting for the model share its next forward pass ([how](#design-decisions), [measured](#throughput-dynamic-batching)) |
 | `BATCH_MAX_TEXTS`      | `16`                                                | Most texts in one shared pass |
 | `BATCH_WAIT_MS`        | `0`                                                 | Milliseconds a pass may wait to collect more texts; `0` never adds latency |
 | `HOST` / `PORT`        | `127.0.0.1` / `8000`                                |  |
@@ -590,7 +626,9 @@ tokenizer unchanged, which is what the project's RoBERTa models were trained on.
   next pass takes all of them (up to `BATCH_MAX_TEXTS`). Batches therefore form only when
   there is a queue, so light traffic pays no extra latency and heavy traffic gets the
   throughput of batches. Each caller still gets its own predictions, and tests check that
-  batched scores equal unbatched ones. ([`batching.py`](src/review_classifier/batching.py))
+  batched scores equal unbatched ones. On AWS this gave 79% more throughput with 16
+  clients and no slowdown for a single one, so it is on by default.
+  ([`batching.py`](src/review_classifier/batching.py))
 - **One forward pass at a time by default.** On a CPU, concurrent passes compete for the
   same cores. Measured with the benchmark on a 2-vCPU x86 machine and a BERT-base-sized
   model during development: with 16 concurrent clients sending short reviews, a limit of one
@@ -685,9 +723,8 @@ tests/               unit and integration tests
 - [x] **5. Operations** — Prometheus metrics, Grafana dashboard and alert rules as code,
       monitoring on the instance behind a tunnel, deployment files shipped in each release,
       and a reproducible benchmark of latency, throughput, memory and error rate, run on AWS
-- [ ] **6. Throughput** — use both vCPUs and batch concurrent requests on the server,
-      measured against the [AWS baseline](#results-on-aws) (about 10 short reviews per second
-      one at a time; 21 per second in batches of 16). *`INFERENCE_THREADS`, dynamic
-      batching and benchmark variants built and tested; AWS comparison next.*
+- [x] **6. Throughput** — dynamic batching on the server, `INFERENCE_THREADS`, and benchmark
+      variants to compare configurations on the instance: [+79% throughput and −43% p95
+      latency](#throughput-dynamic-batching) under load on the same hardware
 - [ ] Later: the per-variety Gemma-2-2B LoRA sarcasm adapters with adapter switching,
       carried over from the Gradio app (needs a CUDA GPU)

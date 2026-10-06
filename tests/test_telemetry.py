@@ -171,9 +171,11 @@ def _post_concurrently(url: str, n: int) -> list[int]:
 @pytest.mark.parametrize(("limit", "expected_max"), [(1, 1), (2, 2), (None, 4)])
 def test_inference_concurrency_limit(limit, expected_max):
     predictor = SlowPredictor()
-    app = create_app(
-        Settings(model_backend="dummy", max_concurrent_inferences=limit), predictor=predictor
+    # Without batching: this measures the plain concurrency limit.
+    settings = Settings(
+        model_backend="dummy", max_concurrent_inferences=limit, batch_requests=False
     )
+    app = create_app(settings, predictor=predictor)
     with live_server(app) as url:
         assert _post_concurrently(url, 4) == [200] * 4
         with urllib.request.urlopen(f"{url}/metrics", timeout=5) as r:
