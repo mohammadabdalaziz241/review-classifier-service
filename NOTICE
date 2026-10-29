@@ -1,0 +1,19 @@
+review-classifier-service
+Copyright 2026 Mohammad Abdalaziz
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Third-party models and data (not included in this repository; downloaded at
+run time)
+---------------------------------------------------------------------------
+- roberta-base (FacebookAI/roberta-base), released with fairseq under the MIT
+  License - https://github.com/facebookresearch/fairseq
+- BESSTIE benchmark: Srirag, Joshi, Painter and Kanojia, "BESSTIE: A Benchmark
+  for Sentiment and Sarcasm Classification for Varieties of English",
+  Findings of ACL 2025, doi:10.18653/v1/2025.findings-acl.441. Released under
+  CC BY 4.0 - https://huggingface.co/datasets/unswnlporg/BESSTIE
+  The models in this project are trained on the surrey-nlp/BESSTIE-CW-26
+  version of the data.
+
+The fine-tuned checkpoints published by this project are derived from the
+model and data above and remain subject to their terms.
