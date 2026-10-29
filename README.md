@@ -720,3 +720,7 @@ notebooks/
 results/             manifests and evaluation reports of the published models
 tests/               unit and integration tests
 ```
+
+## Licence
+
+Code: [Apache-2.0](LICENSE). The published checkpoints are derived from roberta-base (MIT) and BESSTIE (CC BY 4.0) and remain subject to their terms; see [NOTICE](NOTICE).
